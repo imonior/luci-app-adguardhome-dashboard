@@ -1,4 +1,3 @@
-```markdown
 # 🧩 AdGuardHome LuCI Dashboard
 
 **轻量级 LuCI 静态仪表盘安装器** | **Lightweight LuCI Dashboard Installer**  
