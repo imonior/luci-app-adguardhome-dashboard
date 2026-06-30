@@ -44,7 +44,7 @@ This project provides a **stateless, transactional LuCI dashboard installer** fo
 # 📦 Installation
 ## 🌐 Online Install
 ```sh
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/scripts/install.sh)"
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
 
 ⸻
 
