@@ -1,0 +1,10 @@
+{
+  "id": "luci-app-adguardhome-dashboard",
+  "version": "2.2.0",
+  "title": "AdGuardHome Dashboard",
+  "description": "LuCI dashboard for AdGuard Home (v2.2)",
+  "architecture": "all",
+  "depends": ["luci-base"],
+  "category": "services",
+  "maintainer": "YOUR_USER"
+}

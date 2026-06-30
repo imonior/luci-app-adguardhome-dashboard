@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set Version
+        run: echo "${GITHUB_REF_NAME#v}" > files/version
+
+      - name: Generate checksum
+        run: |
+          cd files
+          rm -f checksums.sha256
+          sha256sum luci/menu.json > checksums.sha256
+          sha256sum luci/acl.json >> checksums.sha256
+          sha256sum view/dashboard.js >> checksums.sha256
+
+      - name: Generate delta
+        run: |
+          cat > files/delta.map <<EOF
+dashboard.js=UPDATE
+menu.json=UPDATE
+acl.json=UPDATE
+EOF
+
+      - name: Generate manifest
+        run: |
+          VERSION=$(cat files/version)
+          cat > manifest.json <<EOF
+{
+  "id": "luci-app-adguardhome-dashboard",
+  "version": "$VERSION",
+  "title": "AdGuardHome Dashboard",
+  "architecture": "all"
+}
+EOF
+
+      - name: Verify
+        run: |
+          cd files
+          sha256sum -c checksums.sha256
+
+      - name: Package
+        run: |
+          mkdir release
+          cp -r files release/
+          cp manifest.json release/
+          cp README.md release/
+          cd release
+          zip -r luci-app-adguardhome-dashboard.zip .
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/luci-app-adguardhome-dashboard.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
