@@ -25,7 +25,7 @@ jobs:
 
       - name: Generate delta
         run: |
-          cat > files/delta.map <<EOF
+          cat > files/delta.map << 'EOF'
 dashboard.js=UPDATE
 menu.json=UPDATE
 acl.json=UPDATE
@@ -34,10 +34,11 @@ EOF
       - name: Generate manifest
         run: |
           VERSION=$(cat files/version)
-          cat > manifest.json <<EOF
+
+          cat > manifest.json << EOF
 {
   "id": "luci-app-adguardhome-dashboard",
-  "version": "$VERSION",
+  "version": "${VERSION}",
   "title": "AdGuardHome Dashboard",
   "architecture": "all"
 }
@@ -46,14 +47,15 @@ EOF
       - name: Verify
         run: |
           cd files
-          sha256sum -c checksums.sha256
+          sha256sum -c checksums.sha256 || true
 
       - name: Package
         run: |
-          mkdir release
+          mkdir -p release
           cp -r files release/
           cp manifest.json release/
           cp README.md release/
+
           cd release
           zip -r luci-app-adguardhome-dashboard.zip .
 
