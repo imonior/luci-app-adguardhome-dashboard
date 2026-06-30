@@ -1,10 +1,13 @@
 {
   "id": "luci-app-adguardhome-dashboard",
-  "version": "2.2.0",
-  "title": "AdGuardHome Dashboard",
-  "description": "LuCI dashboard for AdGuard Home (v2.2)",
+  "name": "AdGuard Home Dashboard",
+  "version": "1.0.0",
+  "description": "Minimalist LuCI dashboard for AdGuard Home, featuring UBus state tracking and real-time port detection.",
+  "author": "imonior",
+  "license": "MIT",
   "architecture": "all",
-  "depends": ["luci-base"],
-  "category": "services",
-  "maintainer": "YOUR_USER"
+  "homepage": "https://github.com/imonior/luci-app-adguardhome-dashboard",
+  "dependencies": ["luci-base", "rpcd"],
+  "type": "luci-app",
+  "category": "Services"
 }

@@ -1,21 +1,8 @@
 {
-    "luci-app-adguardhome-dashboard": {
-        "description": "AdGuard Home Dashboard Access",
-        "read": {
-            "ubus": {
-                "luci": [
-                    "getBoardJSON",
-                    "getInitList"
-                ]
-            },
-            "file": {
-                "/etc/adguardhome-dashboard.version": [ "read" ]
-            }
-        },
-        "write": {
-            "file": {
-                "/etc/adguardhome-dashboard.version": [ "write" ]
-            }
-        }
-    }
+	"luci-app-adguardhome-dashboard": {
+		"description": "Grant access to AdGuard Home Dashboard Menu and UI",
+		"read": {
+			"cgi-io": [ "list" ]
+		}
+	}
 }
