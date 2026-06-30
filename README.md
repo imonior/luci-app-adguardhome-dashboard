@@ -48,13 +48,13 @@ This project provides a stateless LuCI dashboard installer for AdGuard Home:
 
 # 📦 Installation
 
-## Online Install
+## 📦 Online Install
 ```sh
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
 ```
 ---
 
-## Offline Install
+## 📦 Offline Install
 ```sh
 unzip luci-app-adguardhome-dashboard.zip
 cd luci-app-adguardhome-dashboard
@@ -62,19 +62,19 @@ sh scripts/install.sh
 ```
 ---
 
-## Upgrade
+## 📦 Upgrade
 ```sh
 sh scripts/install.sh
 ```
 ---
 
-## Uninstall
+## 📦 Uninstall
 ```sh
 sh scripts/uninstall.sh
 ```
 ---
 
-## Self Update
+## 📦 Self Update
 ```sh
 sh scripts/self-update.sh
 ```
@@ -100,7 +100,7 @@ luci-app-adguardhome-dashboard/
 │       └── dashboard.js
 ├── manifest.json
 └── README.md
-
+```
 ---
 
 # ⚙️ System Requirements
