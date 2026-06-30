@@ -17,90 +17,53 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      ########################################################################
-      # Version
-      ########################################################################
-      - name: Set Version
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "$VERSION" > files/version
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+      - name: Version
+        run: echo "${GITHUB_REF_NAME#v}" > files/version
 
-      ########################################################################
-      # Checksums
-      ########################################################################
-      - name: Generate checksum
+      - name: Checksum
         run: |
           cd files
           rm -f checksums.sha256
-          find luci view -type f | sort | while read f; do
-            sha256sum "$f" >> checksums.sha256
+          for f in luci/* view/*; do
+            test -f "$f" && sha256sum "$f" >> checksums.sha256
           done
 
-      ########################################################################
-      # Delta map (SAFE MODE - no heredoc, no jq)
-      ########################################################################
-      - name: Generate delta map
+      - name: Delta
         run: |
           cd files
+          echo "menu.json=UPDATE" > delta.map
+          echo "acl.json=UPDATE" >> delta.map
+          echo "dashboard.js=UPDATE" >> delta.map
 
-          > delta.map
-
-          while read line; do
-            file=$(echo "$line" | awk '{print $2}')
-            echo "$file=UPDATE" >> delta.map
-          done < checksums.sha256
-
-      ########################################################################
-      # Manifest (YAML SAFE JSON - NO jq multiline)
-      ########################################################################
-      - name: Generate manifest
+      - name: Manifest
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          v="${GITHUB_REF_NAME#v}"
+          echo "{\"id\":\"luci-app-adguardhome-dashboard\",\"version\":\"$v\"}" > manifest.json
 
-          printf '{"id":"luci-app-adguardhome-dashboard","version":"%s","type":"luci-app","min_fw":"21","update_strategy":"delta"}\n' "$VERSION" > manifest.json
-
-      ########################################################################
-      # Feed index (YAML SAFE JSON)
-      ########################################################################
-      - name: Generate feed index
+      - name: Index
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          v="${GITHUB_REF_NAME#v}"
+          echo "{\"id\":\"luci-app-adguardhome-dashboard\",\"version\":\"$v\"}" > files/index.json
 
-          printf '{"id":"luci-app-adguardhome-dashboard","version":"%s","manifest":"manifest.json","download":"https://github.com/%s/releases/download/v%s/luci-app-adguardhome-dashboard.zip"}\n' \
-          "$VERSION" "$GITHUB_REPOSITORY" "$VERSION" > files/index.json
-
-      ########################################################################
-      # Verify checksum
-      ########################################################################
-      - name: Verify checksum
+      - name: Verify
         run: |
           cd files
           sha256sum -c checksums.sha256
 
-      ########################################################################
-      # Package
-      ########################################################################
-      - name: Build package
+      - name: Package
         run: |
           rm -rf release
-          mkdir -p release
-
+          mkdir release
           cp -r files release/
           cp manifest.json release/
           cp README.md release/
-
           cd release
-          zip -r luci-app-adguardhome-dashboard.zip .
+          zip -r package.zip .
 
-      ########################################################################
-      # Release
-      ########################################################################
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ env.VERSION }}
-          name: v${{ env.VERSION }}
-          files: release/luci-app-adguardhome-dashboard.zip
+          tag_name: ${{ github.ref_name }}
+          files: release/package.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
