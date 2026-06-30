@@ -1,7 +1,7 @@
 # 🧩 luci-app-adguardhome-dashboard
 
 A lightweight, production-grade LuCI dashboard installer for AdGuard Home.  
-Designed for OpenWrt / ImmortalWrt / iStoreOS.
+Designed for [OpenWrt](https://github.com/openwrt/openwrt) / [ImmortalWrt](https://github.com/immortalwrt/immortalwrt) / [iStoreOS](https://github.com/istoreos/istoreos).
 
 ---
 
