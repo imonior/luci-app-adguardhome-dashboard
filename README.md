@@ -49,7 +49,7 @@ This project provides a stateless LuCI dashboard installer for AdGuard Home:
 # 📦 Installation
 
 ## Online Install
-
+```sh
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
 
 ---
@@ -106,9 +106,9 @@ luci-app-adguardhome-dashboard/
 
 | System | Status |
 |--------|--------|
-| OpenWrt | Supported |
-| ImmortalWrt | Supported |
-| iStoreOS | Supported |
+| OpenWrt | ✅ |
+| ImmortalWrt | ✅ |
+| iStoreOS | ✅ |
 
 ---
 
