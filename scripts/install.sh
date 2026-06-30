@@ -2,7 +2,7 @@
 set -e
 
 ###############################################################################
-# AdGuardHome Dashboard Installer v2.2 FINAL
+# AdGuardHome Dashboard Installer v2.3 FINAL (apk/opkg compatible)
 ###############################################################################
 
 VERSION_FILE="/etc/adguardhome-dashboard.version"
@@ -26,6 +26,38 @@ VIEW_DIR="/www/luci-static/resources/view/adguardhome"
 ###############################################################################
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+###############################################################################
+# PACKAGE MANAGER DETECTION (NEW CORE)
+###############################################################################
+detect_pm() {
+    if command -v apk >/dev/null 2>&1; then
+        echo "apk"
+    elif command -v opkg >/dev/null 2>&1; then
+        echo "opkg"
+    else
+        echo "unknown"
+    fi
+}
+
+install_pkg() {
+    PM=$(detect_pm)
+
+    case "$PM" in
+        apk)
+            log "using apk package manager"
+            apk add "$@" >/dev/null 2>&1 || true
+            ;;
+        opkg)
+            log "using opkg package manager"
+            opkg update >/dev/null 2>&1 || true
+            opkg install "$@" >/dev/null 2>&1 || true
+            ;;
+        *)
+            log "WARNING: no package manager found"
+            ;;
+    esac
 }
 
 ###############################################################################
@@ -56,7 +88,7 @@ download() {
 }
 
 ###############################################################################
-# MODE DETECTION (FIXED)
+# MODE DETECTION
 ###############################################################################
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
@@ -103,8 +135,6 @@ fetch() {
         download "$REMOTE_BASE/files/version" "$TMP/version" || true
         download "$REMOTE_BASE/files/checksums.sha256" "$TMP/checksums.sha256" || true
         download "$REMOTE_BASE/files/delta.map" "$TMP/delta.map" || true
-
-        # optional feed
         download "$REMOTE_BASE/files/index.json" "$TMP/index.json" || true
     fi
 }
@@ -159,7 +189,7 @@ full_install() {
 }
 
 ###############################################################################
-# AGH CORE INSTALL
+# AGH CORE INSTALL (SAFE + COMPATIBLE)
 ###############################################################################
 install_agh() {
     if [ -x /opt/AdGuardHome/AdGuardHome ]; then
@@ -169,6 +199,8 @@ install_agh() {
 
     log "installing AdGuardHome (official)"
 
+    install_pkg curl ca-certificates
+
     sh -c "$(curl -fsSL https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh)"
 }
 
@@ -177,14 +209,6 @@ install_agh() {
 ###############################################################################
 write_version() {
     [ -f "$TMP/version" ] && cp "$TMP/version" "$VERSION_FILE"
-}
-
-###############################################################################
-# INDEX (OPTIONAL FEED)
-###############################################################################
-fetch_index() {
-    [ -f "$TMP/index.json" ] || return 0
-    log "feed index loaded (optional)"
 }
 
 ###############################################################################
@@ -199,7 +223,7 @@ refresh_luci() {
 }
 
 ###############################################################################
-# ERROR HANDLER
+# ERROR HANDLER (FIXED: no trap loop)
 ###############################################################################
 on_error() {
     log "ERROR occurred → rollback"
@@ -208,7 +232,7 @@ on_error() {
     exit 1
 }
 
-trap on_error INT TERM EXIT
+trap on_error INT TERM
 
 ###############################################################################
 # MAIN
@@ -223,8 +247,6 @@ main() {
     verify_checksum
 
     apply_delta || full_install
-
-    fetch_index
 
     write_version
     refresh_luci
