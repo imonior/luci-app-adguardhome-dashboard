@@ -5,37 +5,55 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      ########################################################################
+      # 1. VERSION LOCK（防重复 tag / 防污染）
+      ########################################################################
       - name: Set Version
-        run: echo "${GITHUB_REF_NAME#v}" > files/version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "$VERSION" > files/version
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
+      ########################################################################
+      # 2. CHECKSUM GENERATION（严格一致性）
+      ########################################################################
       - name: Generate checksum
         run: |
           cd files
           rm -f checksums.sha256
-          sha256sum luci/menu.json > checksums.sha256
-          sha256sum luci/acl.json >> checksums.sha256
-          sha256sum view/dashboard.js >> checksums.sha256
 
-      - name: Generate delta
+          find luci view -type f | sort | while read f; do
+            sha256sum "$f" >> checksums.sha256
+          done
+
+      ########################################################################
+      # 3. DELTA MAP（未来扩展 diff upgrade）
+      ########################################################################
+      - name: Generate delta map
         run: |
-          cat > files/delta.map << 'EOF'
-dashboard.js=UPDATE
+          cat > files/delta.map <<EOF
 menu.json=UPDATE
 acl.json=UPDATE
+dashboard.js=UPDATE
 EOF
 
+      ########################################################################
+      # 4. MANIFEST（统一版本源）
+      ########################################################################
       - name: Generate manifest
         run: |
-          VERSION=$(cat files/version)
-
-          cat > manifest.json << EOF
+          cat > manifest.json <<EOF
 {
   "id": "luci-app-adguardhome-dashboard",
   "version": "${VERSION}",
@@ -44,14 +62,35 @@ EOF
 }
 EOF
 
-      - name: Verify
+      ########################################################################
+      # 5. INDEX FEED（v2.2/v3 核心）
+      ########################################################################
+      - name: Generate index feed
+        run: |
+          cat > files/index.json <<EOF
+{
+  "id": "luci-app-adguardhome-dashboard",
+  "version": "${VERSION}",
+  "manifest": "manifest.json",
+  "download": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/luci-app-adguardhome-dashboard.zip"
+}
+EOF
+
+      ########################################################################
+      # 6. VERIFY (fail fast)
+      ########################################################################
+      - name: Verify checksum
         run: |
           cd files
-          sha256sum -c checksums.sha256 || true
+          sha256sum -c checksums.sha256
 
-      - name: Package
+      ########################################################################
+      # 7. PACKAGE (固定结构)
+      ########################################################################
+      - name: Build package
         run: |
           mkdir -p release
+
           cp -r files release/
           cp manifest.json release/
           cp README.md release/
@@ -59,9 +98,14 @@ EOF
           cd release
           zip -r luci-app-adguardhome-dashboard.zip .
 
+      ########################################################################
+      # 8. RELEASE (idempotent safe publish)
+      ########################################################################
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
           files: release/luci-app-adguardhome-dashboard.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
