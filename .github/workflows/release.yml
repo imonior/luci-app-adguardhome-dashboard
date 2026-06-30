@@ -13,11 +13,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      ########################################################################
+      # 1. CHECKOUT
+      ########################################################################
       - name: Checkout
         uses: actions/checkout@v4
 
       ########################################################################
-      # 1. VERSION LOCK（防重复 tag / 防污染）
+      # 2. VERSION LOCK
       ########################################################################
       - name: Set Version
         run: |
@@ -26,7 +29,7 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       ########################################################################
-      # 2. CHECKSUM GENERATION（严格一致性）
+      # 3. CHECKSUM (fully deterministic)
       ########################################################################
       - name: Generate checksum
         run: |
@@ -38,7 +41,7 @@ jobs:
           done
 
       ########################################################################
-      # 3. DELTA MAP（未来扩展 diff upgrade）
+      # 4. DELTA MAP (simple upgrade engine)
       ########################################################################
       - name: Generate delta map
         run: |
@@ -49,35 +52,33 @@ dashboard.js=UPDATE
 EOF
 
       ########################################################################
-      # 4. MANIFEST（统一版本源）
+      # 5. MANIFEST (NO HEREDOC JSON SAFETY VERSION)
       ########################################################################
       - name: Generate manifest
         run: |
-          cat > manifest.json <<EOF
-{
+          printf '{
   "id": "luci-app-adguardhome-dashboard",
-  "version": "${VERSION}",
+  "version": "%s",
   "title": "AdGuardHome Dashboard",
   "architecture": "all"
 }
-EOF
+' "$VERSION" > manifest.json
 
       ########################################################################
-      # 5. INDEX FEED（v2.2/v3 核心）
+      # 6. INDEX FEED (safe printf, no YAML risk)
       ########################################################################
       - name: Generate index feed
         run: |
-          cat > files/index.json <<EOF
-{
+          printf '{
   "id": "luci-app-adguardhome-dashboard",
-  "version": "${VERSION}",
+  "version": "%s",
   "manifest": "manifest.json",
-  "download": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/luci-app-adguardhome-dashboard.zip"
+  "download": "https://github.com/%s/releases/download/v%s/luci-app-adguardhome-dashboard.zip"
 }
-EOF
+' "$VERSION" "${GITHUB_REPOSITORY}" "$VERSION" > files/index.json
 
       ########################################################################
-      # 6. VERIFY (fail fast)
+      # 7. VERIFY (fail-fast integrity check)
       ########################################################################
       - name: Verify checksum
         run: |
@@ -85,10 +86,11 @@ EOF
           sha256sum -c checksums.sha256
 
       ########################################################################
-      # 7. PACKAGE (固定结构)
+      # 8. PACKAGE (fixed structure release bundle)
       ########################################################################
       - name: Build package
         run: |
+          rm -rf release
           mkdir -p release
 
           cp -r files release/
@@ -99,7 +101,7 @@ EOF
           zip -r luci-app-adguardhome-dashboard.zip .
 
       ########################################################################
-      # 8. RELEASE (idempotent safe publish)
+      # 9. RELEASE (idempotent safe publish)
       ########################################################################
       - name: Release
         uses: softprops/action-gh-release@v1
