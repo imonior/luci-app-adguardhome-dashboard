@@ -9,50 +9,55 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Version
-        run: echo "${GITHUB_REF_NAME#v}" > files/version
+      - name: Set Version
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          echo "$VER" > files/version
 
-      - name: Checksum
+      - name: Generate checksum
         run: |
           cd files
           rm -f checksums.sha256
-          for f in luci/*.json view/*.js; do
-            [ -f "$f" ] && sha256sum "$f" >> checksums.sha256
+          find luci view -type f -name "*.json" -o -name "*.js" | sort | while read f; do
+            sha256sum "$f" >> checksums.sha256
           done
 
-      - name: Delta
+      - name: Generate delta
         run: |
-          cat > files/delta.map <<EOF
-menu.json=UPDATE
-acl.json=UPDATE
-dashboard.js=UPDATE
-EOF
+          printf "menu.json=UPDATE\nacl.json=UPDATE\ndashboard.js=UPDATE\n" > files/delta.map
 
       - name: Manifest
         run: |
           echo "{\"id\":\"luci-app-adguardhome-dashboard\",\"version\":\"${GITHUB_REF_NAME#v}\"}" > manifest.json
 
       - name: Verify
-        run: cd files && sha256sum -c checksums.sha256
+        run: |
+          cd files
+          sha256sum -c checksums.sha256
 
       - name: Package
         run: |
-          mkdir release
-          cp -r files release/
-          cp manifest.json release/
-          cp README.md release/
+          rm -rf release
+          mkdir -p release/package
+
+          cp -r files release/package/
+          cp manifest.json release/package/
+          cp README.md release/package/
+
           cd release
-          zip -r package.zip .
+          zip -r package.zip package
 
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ github.ref_name }}
           files: release/package.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

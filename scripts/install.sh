@@ -34,7 +34,7 @@ download() {
     url="$1"
     out="$2"
 
-    curl -fSL --retry 3 "$url" -o "$out" || return 1
+    curl -fSL --retry 3 --connect-timeout 10 "$url" -o "$out" || return 1
     [ -s "$out" ] || return 1
 }
 
@@ -46,22 +46,26 @@ backup() {
 }
 
 rollback() {
-    log "rollback"
+    log "rollback triggered"
     cp -r "$BACKUP"/* / 2>/dev/null || true
 }
 
 fetch() {
     mkdir -p "$TMP"
 
+    # offline mode
     if [ -d "./files" ]; then
         cp -r ./files/* "$TMP/"
-    else
-        download "$BASE/files/luci/menu.json" "$TMP/menu.json" || return 1
-        download "$BASE/files/luci/acl.json" "$TMP/acl.json" || return 1
-        download "$BASE/files/view/dashboard.js" "$TMP/dashboard.js" || return 1
-        download "$BASE/files/checksums.sha256" "$TMP/checksums.sha256" || true
-        download "$BASE/files/version" "$TMP/version" || true
+        return 0
     fi
+
+    # online mode
+    download "$BASE/files/luci/menu.json" "$TMP/menu.json" || return 1
+    download "$BASE/files/luci/acl.json" "$TMP/acl.json" || return 1
+    download "$BASE/files/view/dashboard.js" "$TMP/dashboard.js" || return 1
+
+    download "$BASE/files/checksums.sha256" "$TMP/checksums.sha256" || true
+    download "$BASE/files/version" "$TMP/version" || true
 }
 
 verify() {
@@ -70,8 +74,11 @@ verify() {
     cd "$TMP" || return 1
 
     while read sum file; do
-        [ -f "$file" ] || return 1
-        [ -s "$file" ] || return 1
+        [ -f "$file" ] || {
+            log "missing file: $file"
+            return 1
+        }
+
         echo "$sum  $file" | sha256sum -c - || return 1
     done < checksums.sha256
 }
@@ -79,9 +86,9 @@ verify() {
 install() {
     mkdir -p "$MENU_DIR" "$ACL_DIR" "$VIEW_DIR"
 
-    cp "$TMP/menu.json" "$MENU_DIR/luci-app-adguardhome-dashboard.json"
-    cp "$TMP/acl.json" "$ACL_DIR/luci-app-adguardhome-dashboard.json"
-    cp "$TMP/dashboard.js" "$VIEW_DIR/dashboard.js"
+    cp "$TMP/luci/menu.json" "$MENU_DIR/luci-app-adguardhome-dashboard.json"
+    cp "$TMP/luci/acl.json" "$ACL_DIR/luci-app-adguardhome-dashboard.json"
+    cp "$TMP/view/dashboard.js" "$VIEW_DIR/dashboard.js"
 }
 
 write_version() {
@@ -99,7 +106,7 @@ main() {
     write_version
 
     unlock
-    log "done"
+    log "install success"
 }
 
 main
