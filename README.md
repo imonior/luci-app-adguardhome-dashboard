@@ -115,19 +115,24 @@ luci-app-adguardhome-dashboard/
 
 # 📡 Notes
 
-AdGuard Home is installed via official upstream script.
+[AdGuard Home](https://github.com/AdguardTeam/AdGuardHome) is installed via official upstream script.
 
 This project only manages LuCI dashboard layer.
+
+else, you can manually install ADH via curl before install this LuCI dashboard:
+```sh
+curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
+```
 
 ---
 
 # 📊 Logging
 
 Install log:
- /etc/adguardhome-dashboard.log
+- /etc/adguardhome-dashboard.log
 
 Version file:
- /etc/adguardhome-dashboard.version
+- /etc/adguardhome-dashboard.version
 
 ---
 
@@ -141,10 +146,10 @@ Version file:
 ---
 
 # 📦 CI/CD
-
+```sh
 git tag v2.2.0
 git push origin v2.2.0
-
+```
 Pipeline will:
 - Build release package
 - Generate checksum
