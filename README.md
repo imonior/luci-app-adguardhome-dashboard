@@ -1,83 +1,39 @@
-# 🧩 luci-app-adguardhome-dashboard
+# 🧩 AdGuardHome LuCI Dashboard
 
-A lightweight, production-grade LuCI dashboard installer for AdGuard Home.  
-Designed for [OpenWrt](https://github.com/openwrt/openwrt) / [ImmortalWrt](https://github.com/immortalwrt/immortalwrt) / [iStoreOS](https://github.com/istoreos/istoreos).
+## 📦 v1.0 Stable Minimal Edition
 
----
-
-# 🚀 Overview
-
-This project provides a stateless LuCI dashboard installer for AdGuard Home:
-
-- Safe installation (rollback supported)
-- Automatic upgrade system
-- Integrity verification (SHA256)
-- Delta-based updates
-- GitHub Actions CI/CD release system
-- Optional plugin feed support (v2.2)
+Lightweight LuCI dashboard installer for AdGuard Home.
 
 ---
 
-# ✨ Features
+# 🚀 Features
 
-## v1.0 - Basic Installer
-- One-line install
-- Online / Offline support
-- LuCI menu injection
-- Backup before install
+- Install + Update unified (idempotent)
 
-## v2.0 - Transactional Engine
-- Lock-based concurrency protection
-- Full rollback support
-- SHA256 checksum verification
-- Delta upgrade system
-- Install journal logging
+- Auto install AdGuard Home (official script)
 
-## v2.1 - Release System
-- GitHub Actions auto release
-- Git tag based versioning
-- Auto changelog generation
-- Manifest support
+- Safe download with retry + size check
 
-## v2.2 - Ecosystem Layer
-- Plugin index system (index.json)
-- Self-update engine
-- Feed-compatible architecture
+- No CI/CD / no version system / no checksum system
+
+- Works on OpenWrt / ImmortalWrt / iStoreOS
 
 ---
 
-# 📦 Installation
+# 📦 Install / Update
 
-## 🌐 Online Install
 ```sh
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
 ```
----
+👉 install.sh = install + update (same command)
 
-## 📦 Offline Install
-```sh
-unzip luci-app-adguardhome-dashboard.zip
-cd luci-app-adguardhome-dashboard
-sh scripts/install.sh
-```
----
-
-## 🔄 Upgrade
-```sh
-sh scripts/install.sh
-```
 ---
 
 ## 🧹 Uninstall
 ```sh
 sh scripts/uninstall.sh
 ```
----
 
-## 🔄 Self Update
-```sh
-sh scripts/self-update.sh
-```
 ---
 
 # 🧠 Architecture
@@ -87,11 +43,7 @@ luci-app-adguardhome-dashboard/
 ├── scripts/
 │   ├── install.sh
 │   ├── uninstall.sh
-│   └── self-update.sh
 ├── files/
-│   ├── version
-│   ├── checksums.sha256
-│   ├── delta.map
 │   ├── index.json
 │   ├── luci/
 │   │   ├── menu.json
@@ -147,8 +99,8 @@ Version file:
 
 # 📦 CI/CD
 ```sh
-git tag v2.2.0
-git push origin v2.2.0
+git tag v1.0
+git push origin v1.0
 ```
 Pipeline will:
 - Build release package
@@ -157,9 +109,19 @@ Pipeline will:
 
 ---
 
+⚙️ Philosophy
+
+* Stateless
+* No build system
+* No package manager abstraction
+* No CI/CD complexity
+* Fail-fast download validation
+
+---
+
 # 🚀 Roadmap
 
-v2.3:
+v1.1:
 - Plugin store UI
 - Multi-feed system
 - Dependency resolution

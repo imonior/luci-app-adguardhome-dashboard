@@ -1,17 +1,14 @@
 #!/bin/sh
+set -e
 
-MENU="/usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json"
-ACL="/usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json"
-VIEW="/www/luci-static/resources/view/adguardhome"
+MENU_FILE="/usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json"
+ACL_FILE="/usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json"
+VIEW_FILE="/www/luci-static/resources/view/adguardhome/dashboard.js"
 
-rm -f "$MENU" "$ACL"
-rm -rf "$VIEW"
+echo "[uninstall] start"
 
-rm -f /etc/adguardhome-dashboard.version
+rm -f "$MENU_FILE"
+rm -f "$ACL_FILE"
+rm -f "$VIEW_FILE"
 
-rm -rf /tmp/luci*
-
-/etc/init.d/rpcd restart
-/etc/init.d/uhttpd restart
-
-echo "Uninstalled"
+echo "[uninstall] done"
