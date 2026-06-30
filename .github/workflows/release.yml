@@ -14,14 +14,11 @@ jobs:
 
     steps:
 
-      ########################################################################
-      # 1. Checkout
-      ########################################################################
       - name: Checkout
         uses: actions/checkout@v4
 
       ########################################################################
-      # 2. Version System
+      # Version
       ########################################################################
       - name: Set Version
         run: |
@@ -30,81 +27,51 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       ########################################################################
-      # 3. Deterministic checksum (source integrity)
+      # Checksums
       ########################################################################
       - name: Generate checksum
         run: |
           cd files
           rm -f checksums.sha256
-
           find luci view -type f | sort | while read f; do
             sha256sum "$f" >> checksums.sha256
           done
 
       ########################################################################
-      # 4. Delta system (real diff tracking)
+      # Delta map (SAFE MODE - no heredoc, no jq)
       ########################################################################
       - name: Generate delta map
         run: |
           cd files
 
-          if [ -f old_checksums.sha256 ]; then
-            OLD=$(cat old_checksums.sha256)
-          else
-            OLD=""
-          fi
-
           > delta.map
 
           while read line; do
             file=$(echo "$line" | awk '{print $2}')
-
-            if ! echo "$OLD" | grep -q "$file"; then
-              echo "$file=UPDATE" >> delta.map
-            fi
+            echo "$file=UPDATE" >> delta.map
           done < checksums.sha256
 
-          cp checksums.sha256 old_checksums.sha256
-
       ########################################################################
-      # 5. Manifest (jq structured safe generation)
+      # Manifest (YAML SAFE JSON - NO jq multiline)
       ########################################################################
       - name: Generate manifest
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
 
-          jq -n \
-            --arg id "luci-app-adguardhome-dashboard" \
-            --arg ver "$VERSION" \
-            '{
-              id: $id,
-              version: $ver,
-              type: "luci-app",
-              min_fw: "21",
-              update_strategy: "delta"
-            }' > manifest.json
+          printf '{"id":"luci-app-adguardhome-dashboard","version":"%s","type":"luci-app","min_fw":"21","update_strategy":"delta"}\n' "$VERSION" > manifest.json
 
       ########################################################################
-      # 6. Feed index (software repo core)
+      # Feed index (YAML SAFE JSON)
       ########################################################################
       - name: Generate feed index
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
 
-          jq -n \
-            --arg id "luci-app-adguardhome-dashboard" \
-            --arg ver "$VERSION" \
-            --arg repo "$GITHUB_REPOSITORY" \
-            '{
-              id: $id,
-              version: $ver,
-              manifest: "manifest.json",
-              download: ("https://github.com/" + $repo + "/releases/download/v" + $ver + "/luci-app-adguardhome-dashboard.zip"),
-              updated_at: now
-            }' > files/index.json
+          printf '{"id":"luci-app-adguardhome-dashboard","version":"%s","manifest":"manifest.json","download":"https://github.com/%s/releases/download/v%s/luci-app-adguardhome-dashboard.zip"}\n' \
+          "$VERSION" "$GITHUB_REPOSITORY" "$VERSION" > files/index.json
 
       ########################################################################
-      # 7. Verify integrity (fail fast build)
+      # Verify checksum
       ########################################################################
       - name: Verify checksum
         run: |
@@ -112,7 +79,7 @@ jobs:
           sha256sum -c checksums.sha256
 
       ########################################################################
-      # 8. Package release (immutable artifact)
+      # Package
       ########################################################################
       - name: Build package
         run: |
@@ -127,7 +94,7 @@ jobs:
           zip -r luci-app-adguardhome-dashboard.zip .
 
       ########################################################################
-      # 9. Publish release (idempotent safe publish)
+      # Release
       ########################################################################
       - name: Release
         uses: softprops/action-gh-release@v1
