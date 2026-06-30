@@ -94,6 +94,3 @@ luci-app-adguardhome-dashboard/
 
 **MIT License** | 轻量 · 稳定 · 可维护  
 **Lightweight · Stable · Maintainable**
-```
-
----
