@@ -28,9 +28,25 @@ log "── 第一部分：AdGuard Home 核心 ──"
 
 if [ -f "$AGH_BIN" ]; then
     log "检测到已安装 AdGuard Home ($AGH_BIN)"
-    # 显示当前版本
-    CURRENT_VER=$("$AGH_BIN" --version 2>&1 | grep -o 'v[0-9.]*' | head -1)
-    [ -n "$CURRENT_VER" ] && log "当前版本: $CURRENT_VER"
+
+    # 获取当前本地版本（兼容 BusyBox，不依赖 grep -o）
+    CURRENT_VER=$("$AGH_BIN" --version 2>&1 | sed -n 's/.*version \(v[0-9.]*\).*/\1/p')
+    [ -z "$CURRENT_VER" ] && CURRENT_VER=$("$AGH_BIN" --version 2>&1 | sed -n 's/.*version \([0-9.]*\).*/v\1/p')
+
+    # 获取 GitHub 最新版本
+    LATEST_VER=$(curl -fsSL -m 8 'https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest' 2>/dev/null \
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+
+    if [ -n "$CURRENT_VER" ] && [ -n "$LATEST_VER" ]; then
+        log "当前版本: $CURRENT_VER    最新版本: $LATEST_VER"
+        if [ "$CURRENT_VER" = "$LATEST_VER" ]; then
+            log "已是最新版本"
+        fi
+    elif [ -n "$CURRENT_VER" ]; then
+        log "当前版本: $CURRENT_VER (无法获取在线版本)"
+    elif [ -n "$LATEST_VER" ]; then
+        log "当前版本: 未知    最新版本: $LATEST_VER"
+    fi
 
     echo ""
     echo "  1) 从官方重新下载安装（覆盖当前版本）"
