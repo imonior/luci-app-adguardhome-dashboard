@@ -20,6 +20,27 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardho
 1. **AdGuard Home 核心** — 检测 `/opt/AdGuardHome/AdGuardHome` 是否已安装，未安装则调用官方脚本自动安装；已安装则可选择覆盖安装（自动停止运行中的服务）或跳过
 2. **LuCI Dashboard** — 从 GitHub 下载菜单注册、Lua Controller、JS View、翻译等文件到临时目录，部署到系统对应位置
 
+### 国内加速 / Proxy
+
+脚本启动时自动检测 GitHub 连通性，直连失败会逐个测试代理节点并显示延迟，选择可用的即可：
+
+```
+  #   代理节点          状态
+  ─────────────────────────────
+  1)  直连              ✗ 不可用
+  2)  ghfast.top        ✓ 320ms
+  3)  gh-proxy.com      ✓ 450ms
+  4)  kkgithub.com      ✗ 超时
+```
+
+也可通过环境变量直接指定代理（跳过检测）：
+
+```sh
+GITHUB_PROXY=https://ghfast.top/ sh -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
+```
+
+> 注意：`curl` 下载脚本本身的 URL 也需要经过代理，如上面示例中 `curl` 的 URL 已加了 `ghfast.top/` 前缀。
+
 ### 从本地项目安装
 
 如果已将项目克隆到路由器，在项目目录内运行会自动使用本地文件（无需联网下载）：

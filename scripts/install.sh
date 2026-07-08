@@ -21,6 +21,16 @@ log() {
     echo "[$ts] $1"
 }
 
+# 简易计时器（兼容 BusyBox date 不支持 %N）
+_now_ms() {
+    local t=$(date +%s%N 2>/dev/null)
+    case "$t" in
+        *N) echo $(( $(date +%s) * 1000 )) ;;
+        *)  echo $(( t / 1000000 )) ;;
+    esac
+}
+_elapsed_ms() { echo $(( $(_now_ms) - $1 )); }
+
 echo ""
 echo "========================================================="
 echo " AdGuardHome LuCI Dashboard 安装程序"
@@ -37,31 +47,51 @@ if [ -n "$GITHUB_PROXY" ]; then
 else
     # 测试 GitHub 直连（5 秒超时）
     log "检测 GitHub 连通性..."
+    _t0=$(_now_ms)
     if curl -fsSL -m 5 -o /dev/null 'https://raw.githubusercontent.com' 2>/dev/null; then
-        log "GitHub 直连正常"
+        log "GitHub 直连正常 ($(_elapsed_ms $_t0)ms)"
     else
-        log "GitHub 直连失败或超时，请选择加速代理："
-        echo ""
-        echo "  1) 直连（再试一次）"
+        log "GitHub 直连失败，正在测试代理节点..."
 
-        # 动态生成代理选项
-        _idx=2
-        _proxy_names=""
+        # 逐个测试代理连通性
+        _proxy_results=""
         for proxy in $PROXY_LIST; do
-            # 提取域名作为显示名
+            _test_url="${proxy}https://raw.githubusercontent.com"
+            _t1=$(_now_ms)
+            if curl -fsSL -m 5 -o /dev/null "$_test_url" 2>/dev/null; then
+                _proxy_results="$_proxy_results ok:$(_elapsed_ms $_t1)"
+            else
+                _proxy_results="$_proxy_results fail:0"
+            fi
+        done
+
+        echo ""
+        echo "  #   代理节点          状态"
+        echo "  ─────────────────────────────"
+        echo "  1)  直连              ✗ 不可用"
+
+        _idx=2
+        _r_iter="$_proxy_results"
+        for proxy in $PROXY_LIST; do
             _domain=$(echo "$proxy" | sed 's|https\{0,1\}://||;s|/$||')
-            echo "  $_idx) $_domain"
-            _proxy_names="$_proxy_names $proxy"
+            _result=$(echo "$_r_iter" | awk '{print $1}')
+            _r_iter=$(echo "$_r_iter" | awk '{$1=""; print}' | sed 's/^ //')
+            _status=$(echo "$_result" | cut -d: -f1)
+            _ms=$(echo "$_result" | cut -d: -f2)
+            if [ "$_status" = "ok" ]; then
+                printf "  %d)  %-18s ✓ %sms\n" "$_idx" "$_domain" "$_ms"
+            else
+                printf "  %d)  %-18s ✗ 超时\n" "$_idx" "$_domain"
+            fi
             _idx=$((_idx + 1))
         done
 
         echo ""
-        printf "请选择 [1-%d，默认 1]: " $((_idx - 1))
+        printf "请选择 [1-%d，默认 2]: " $((_idx - 1))
         read -r PROXY_CHOICE
-        PROXY_CHOICE=${PROXY_CHOICE:-1}
+        PROXY_CHOICE=${PROXY_CHOICE:-2}
 
         if [ "$PROXY_CHOICE" != "1" ]; then
-            # 从列表中选择对应代理
             _i=1
             for proxy in $PROXY_LIST; do
                 if [ "$_i" = "$((PROXY_CHOICE - 1))" ]; then
