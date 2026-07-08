@@ -71,6 +71,7 @@ fetch() {
     
     download "$BASE/files/luci/menu.json" "$TMP/menu.json"
     download "$BASE/files/luci/acl.json" "$TMP/acl.json"
+    download "$BASE/files/luci/controller/adguardhome.lua" "$TMP/adguardhome.lua"
     download "$BASE/files/view/dashboard.js" "$TMP/dashboard.js"
 }
 
@@ -85,8 +86,10 @@ apply() {
     rm -f "$ACL_DIR/luci-app-adguardhome-dashboard.json" 2>/dev/null || true
 
     log "分发各组件至系统对应的路由、权限和视图沙箱..."
+    mkdir -p /usr/share/luci/controller
     cp "$TMP/menu.json" "$MENU_DIR/luci-app-adguardhome-dashboard.json"
     cp "$TMP/acl.json" "$ACL_DIR/luci-app-adguardhome-dashboard.json"
+    cp "$TMP/adguardhome.lua" /usr/share/luci/controller/adguardhome.lua
     cp "$TMP/dashboard.js" "$VIEW_DIR/dashboard.js"
 
     log "写入本地版本锚定标记..."
@@ -96,6 +99,7 @@ apply() {
     log "规范化文件系统权限 (遵循 Linux 只读静态分发规范)..."
     chmod 644 "$MENU_DIR/luci-app-adguardhome-dashboard.json" \
               "$ACL_DIR/luci-app-adguardhome-dashboard.json" \
+              /usr/share/luci/controller/adguardhome.lua \
               "$VIEW_DIR/dashboard.js" 2>/dev/null || true
 }
 
@@ -121,7 +125,8 @@ restart_luci() {
 # 6. 回调验证
 ###############################################################################
 verify() {
-    if [ -f "$VIEW_DIR/dashboard.js" ] && [ -f "$ACL_DIR/luci-app-adguardhome-dashboard.json" ]; then
+    if [ -f "$VIEW_DIR/dashboard.js" ] && [ -f "$ACL_DIR/luci-app-adguardhome-dashboard.json" ] && \
+       [ -f /usr/share/luci/controller/adguardhome.lua ]; then
         return 0
     else
         log "❌ 部署验证失败：核心组件未能成功写入目标路径"

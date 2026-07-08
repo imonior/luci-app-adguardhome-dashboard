@@ -12,6 +12,7 @@ log "start uninstall"
 # 1. 彻底移除所有 LuCI 资产
 rm -f /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json
 rm -f /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json
+rm -f /usr/share/luci/controller/adguardhome.lua
 rm -f /www/luci-static/resources/view/adguardhome/dashboard.js
 # 移除对应的视图目录（如果为空的话）
 rm -rf /www/luci-static/resources/view/adguardhome 2>/dev/null || true
