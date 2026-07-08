@@ -72,6 +72,8 @@ fetch() {
     download "$BASE/files/luci/menu.json" "$TMP/menu.json"
     download "$BASE/files/luci/acl.json" "$TMP/acl.json"
     download "$BASE/files/luci/controller/adguardhome.lua" "$TMP/adguardhome.lua"
+    download "$BASE/files/luci/i18n/adguardhome.po" "$TMP/adguardhome.po"
+    download "$BASE/files/luci/i18n/adguardhome.zh-cn.po" "$TMP/adguardhome.zh-cn.po"
     download "$BASE/files/view/dashboard.js" "$TMP/dashboard.js"
 }
 
@@ -86,20 +88,34 @@ apply() {
     rm -f "$ACL_DIR/luci-app-adguardhome-dashboard.json" 2>/dev/null || true
 
     log "分发各组件至系统对应的路由、权限和视图沙箱..."
-    mkdir -p /usr/share/luci/controller
+    mkdir -p /usr/share/luci/controller /usr/share/luci/i18n /usr/lib/lua/luci/i18n
     cp "$TMP/menu.json" "$MENU_DIR/luci-app-adguardhome-dashboard.json"
     cp "$TMP/acl.json" "$ACL_DIR/luci-app-adguardhome-dashboard.json"
     cp "$TMP/adguardhome.lua" /usr/share/luci/controller/adguardhome.lua
+    cp "$TMP/adguardhome.po" /usr/share/luci/i18n/adguardhome.po
+    cp "$TMP/adguardhome.zh-cn.po" /usr/share/luci/i18n/adguardhome.zh-cn.po
     cp "$TMP/dashboard.js" "$VIEW_DIR/dashboard.js"
 
+    log "编译 i18n 翻译文件 (.po -> .lmo)..."
+    if command -v po2lmo >/dev/null 2>&1; then
+        po2lmo /usr/share/luci/i18n/adguardhome.po /usr/lib/lua/luci/i18n/adguardhome.lmo
+        po2lmo /usr/share/luci/i18n/adguardhome.zh-cn.po /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo
+        log "i18n 翻译文件编译成功"
+    else
+        log "⚠️ po2lmo 工具未找到，跳过翻译文件编译（部分系统可能需要手动安装 luci-base）"
+    fi
+
     log "写入本地版本锚定标记..."
-    # 从对应的 js 头部提取或直接生成本地版本标识
-    echo "v1.0-Stable" > /etc/adguardhome-dashboard.version
+    echo "v2.0-Full" > /etc/adguardhome-dashboard.version
 
     log "规范化文件系统权限 (遵循 Linux 只读静态分发规范)..."
     chmod 644 "$MENU_DIR/luci-app-adguardhome-dashboard.json" \
               "$ACL_DIR/luci-app-adguardhome-dashboard.json" \
               /usr/share/luci/controller/adguardhome.lua \
+              /usr/share/luci/i18n/adguardhome.po \
+              /usr/share/luci/i18n/adguardhome.zh-cn.po \
+              /usr/lib/lua/luci/i18n/adguardhome.lmo 2>/dev/null \
+              /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo 2>/dev/null \
               "$VIEW_DIR/dashboard.js" 2>/dev/null || true
 }
 

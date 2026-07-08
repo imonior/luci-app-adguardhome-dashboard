@@ -1,7 +1,7 @@
 {
   "id": "luci-app-adguardhome-dashboard",
   "name": "AdGuard Home Dashboard",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Minimalist LuCI dashboard for AdGuard Home, featuring UBus state tracking and real-time port detection.",
   "author": "imonior",
   "license": "MIT",

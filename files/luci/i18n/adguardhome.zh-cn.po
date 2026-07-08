@@ -1,0 +1,148 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: zh_CN\n"
+
+msgid "AdGuard Home"
+msgstr "AdGuard Home"
+
+msgid "AdGuard Home 控制中心"
+msgstr "AdGuard Home 控制中心"
+
+msgid "实时状态监控 · 服务控制 · 日志查看 · 一键升级"
+msgstr "实时状态监控 · 服务控制 · 日志查看 · 一键升级"
+
+msgid "实时仪表盘"
+msgstr "实时仪表盘"
+
+msgid "核心部署"
+msgstr "核心部署"
+
+msgid "核心版本"
+msgstr "核心版本"
+
+msgid "服务状态"
+msgstr "服务状态"
+
+msgid "运行状态"
+msgstr "运行状态"
+
+msgid "Web 端口"
+msgstr "Web 端口"
+
+msgid "管理入口"
+msgstr "管理入口"
+
+msgid "服务控制台"
+msgstr "服务控制台"
+
+msgid "版本更新"
+msgstr "版本更新"
+
+msgid "日志查看器"
+msgstr "日志查看器"
+
+msgid "启动服务"
+msgstr "启动服务"
+
+msgid "重启服务"
+msgstr "重启服务"
+
+msgid "停止服务"
+msgstr "停止服务"
+
+msgid "注册系统服务"
+msgstr "注册系统服务"
+
+msgid "检查更新"
+msgstr "检查更新"
+
+msgid "一键升级"
+msgstr "一键升级"
+
+msgid "刷新日志"
+msgstr "刷新日志"
+
+msgid "执行中..."
+msgstr "执行中..."
+
+msgid "操作执行成功"
+msgstr "操作执行成功"
+
+msgid "操作失败: "
+msgstr "操作失败: "
+
+msgid "未知错误"
+msgstr "未知错误"
+
+msgid "执行异常: "
+msgstr "执行异常: "
+
+msgid "检查中..."
+msgstr "检查中..."
+
+msgid "检查失败"
+msgstr "检查失败"
+
+msgid "确认升级"
+msgstr "确认升级"
+
+msgid "将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。"
+msgstr "将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。"
+
+msgid "取消"
+msgstr "取消"
+
+msgid "确认升级"
+msgstr "确认升级"
+
+msgid "升级任务已启动，请在下方日志查看器中查看进度"
+msgstr "升级任务已启动，请在下方日志查看器中查看进度"
+
+msgid "升级任务启动失败"
+msgstr "升级任务启动失败"
+
+msgid "升级完成，正在刷新状态"
+msgstr "升级完成，正在刷新状态"
+
+msgid "未检查"
+msgstr "未检查"
+
+msgid "暂无日志"
+msgstr "暂无日志"
+
+msgid "获取日志失败"
+msgstr "获取日志失败"
+
+msgid "未知"
+msgstr "未知"
+
+msgid "服务未启动"
+msgstr "服务未启动"
+
+msgid "当前控制模式："
+msgstr "当前控制模式："
+
+msgid "Init.d 系统服务级调用"
+msgstr "Init.d 系统服务级调用"
+
+msgid "AdGuardHome 二进制直接控制（命令保底）"
+msgstr "AdGuardHome 二进制直接控制（命令保底）"
+
+msgid "当前版本："
+msgstr "当前版本："
+
+msgid "最新版本："
+msgstr "最新版本："
+
+msgid "✔ 已下载 (/opt/AdGuardHome/AdGuardHome)"
+msgstr "✔ 已下载 (/opt/AdGuardHome/AdGuardHome)"
+
+msgid "✖ 未发现程序 (请运行官网命令安装)"
+msgstr "✖ 未发现程序 (请运行官网命令安装)"
+
+msgid "✔ 已安装系统服务 | ✔ 开机自启已注册"
+msgstr "✔ 已安装系统服务 | ✔ 开机自启已注册"
+
+msgid "⚠️ 未注册服务 (使用二进制保底控制)"
+msgstr "⚠️ 未注册服务 (使用二进制保底控制)"

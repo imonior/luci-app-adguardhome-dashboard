@@ -54,10 +54,10 @@ return view.extend({
         var self = this;
         return Promise.all([
             self.fetchStatus().catch(function() {
-                return { installed: false, service_installed: false, running: false, version: '未知', port: 3000 };
+                return { installed: false, service_installed: false, running: false, version: _('未知'), port: 3000 };
             }),
             self.fetchLog().catch(function() {
-                return { log: '获取日志失败' };
+                return { log: _('获取日志失败') };
             })
         ]);
     },
@@ -71,7 +71,7 @@ return view.extend({
         var isServiceInstalled = !!status.service_installed;
         var isRunning = !!status.running;
         var pid = status.pid || '—';
-        var versionStr = status.version || '未知';
+        var versionStr = status.version || _('未知');
         var port = status.port || 3000;
         var targetUrl = isRunning
             ? window.location.protocol + '//' + window.location.hostname + ':' + port
@@ -84,7 +84,7 @@ return view.extend({
 
         var runningSpan = E('span', {
             style: isRunning ? 'color:#2dca73;font-weight:bold' : 'color:#e74c3c;font-weight:bold'
-        }, isRunning ? '● 正在运行' + (pid !== '—' ? ' (PID ' + pid + ')' : '') : '■ 已停止');
+        }, isRunning ? _('● 正在运行') + (pid !== '—' ? ' (PID ' + pid + ')' : '') : _('■ 已停止'));
         this.runningEl = runningSpan;
 
         var portSpan = E('span', {}, String(port));
@@ -92,11 +92,11 @@ return view.extend({
 
         var urlContainer = E('span', {}, isRunning
             ? [E('a', { href: targetUrl, target: '_blank', style: 'font-weight:bold;color:#007bff' }, targetUrl)]
-            : '服务未启动'
+            : _('服务未启动')
         );
         this.urlEl = urlContainer;
 
-        var latestVersionCode = E('code', { style: 'margin-right:20px' }, '未检查');
+        var latestVersionCode = E('code', { style: 'margin-right:20px' }, _('未检查'));
         this.latestVersionEl = latestVersionCode;
 
         var checkUpdateBtn = E('button', {
@@ -121,7 +121,7 @@ return view.extend({
 
         var logPre = E('pre', {
             style: 'max-height:400px; overflow-y:auto; background:#1e1e1e; color:#d4d4d4; padding:12px; border-radius:4px; font-size:12px; white-space:pre-wrap; word-wrap:break-word;'
-        }, this.logData || '暂无日志');
+        }, this.logData || _('暂无日志'));
         this.logPre = logPre;
 
         var node = E('div', { class: 'cbi-map' }, [
@@ -134,8 +134,8 @@ return view.extend({
                     E('tr', { class: 'tr' }, [
                         E('td', { class: 'td', style: 'width:32%;font-weight:bold' }, _('核心部署')),
                         E('td', { class: 'td' }, isBinInstalled
-                            ? E('span', { style: 'color:#2dca73;font-weight:bold' }, '✔ 已下载 (/opt/AdGuardHome/AdGuardHome)')
-                            : E('span', { style: 'color:#e74c3c;font-weight:bold' }, '✖ 未发现程序 (请运行官网命令安装)')
+                            ? E('span', { style: 'color:#2dca73;font-weight:bold' }, _('✔ 已下载 (/opt/AdGuardHome/AdGuardHome)'))
+                            : E('span', { style: 'color:#e74c3c;font-weight:bold' }, _('✖ 未发现程序 (请运行官网命令安装)'))
                         )
                     ]),
                     E('tr', { class: 'tr' }, [
@@ -145,8 +145,8 @@ return view.extend({
                     E('tr', { class: 'tr' }, [
                         E('td', { class: 'td', style: 'font-weight:bold' }, _('服务状态')),
                         E('td', { class: 'td' }, isServiceInstalled
-                            ? E('span', { style: 'color:#2dca73' }, '✔ 已安装系统服务 | ✔ 开机自启已注册')
-                            : E('span', { style: 'color:#f39c12;font-weight:bold' }, '⚠️ 未注册服务 (使用二进制保底控制)')
+                            ? E('span', { style: 'color:#2dca73' }, _('✔ 已安装系统服务 | ✔ 开机自启已注册'))
+                            : E('span', { style: 'color:#f39c12;font-weight:bold' }, _('⚠️ 未注册服务 (使用二进制保底控制)'))
                         )
                     ]),
                     E('tr', { class: 'tr' }, [
@@ -168,9 +168,9 @@ return view.extend({
                 E('h3', {}, _('服务控制台')),
                 E('div', { style: 'padding:15px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px' }, [
                     E('div', { style: 'margin-bottom:12px;' }, [
-                        E('strong', {}, '当前控制模式：'),
+                        E('strong', {}, _('当前控制模式：')),
                         E('span', { style: isServiceInstalled ? 'color:#2dca73;font-weight:bold' : 'color:#f39c12;font-weight:bold' },
-                            isServiceInstalled ? ' Init.d 系统服务级调用' : ' AdGuardHome 二进制直接控制（命令保底）')
+                            isServiceInstalled ? _('Init.d 系统服务级调用') : _('AdGuardHome 二进制直接控制（命令保底）'))
                     ]),
                     E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-right:10px', click: function() { self.execAction('start'); } }, _('启动服务')),
                     E('button', { class: 'btn cbi-button cbi-button-action', style: 'margin-right:10px', click: function() { self.execAction('restart'); } }, _('重启服务')),
@@ -183,9 +183,9 @@ return view.extend({
                 E('h3', {}, _('版本更新')),
                 E('div', { style: 'padding:15px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px' }, [
                     E('div', { style: 'margin-bottom:12px;' }, [
-                        E('strong', {}, '当前版本：'),
+                        E('strong', {}, _('当前版本：')),
                         E('code', { style: 'margin-right:20px' }, versionStr),
-                        E('strong', {}, '最新版本：'),
+                        E('strong', {}, _('最新版本：')),
                         latestVersionCode
                     ]),
                     checkUpdateBtn,
@@ -212,7 +212,7 @@ return view.extend({
         this.statusData = status;
         var isRunning = !!status.running;
         var pid = status.pid || '—';
-        var versionStr = status.version || '未知';
+        var versionStr = status.version || _('未知');
         var port = status.port || 3000;
 
         if (this.versionEl) {
@@ -221,8 +221,8 @@ return view.extend({
 
         if (this.runningEl) {
             this.runningEl.textContent = isRunning
-                ? '● 正在运行' + (pid !== '—' ? ' (PID ' + pid + ')' : '')
-                : '■ 已停止';
+                ? _('● 正在运行') + (pid !== '—' ? ' (PID ' + pid + ')' : '')
+                : _('■ 已停止');
             this.runningEl.style.color = isRunning ? '#2dca73' : '#e74c3c';
             this.runningEl.style.fontWeight = 'bold';
         }
@@ -237,7 +237,7 @@ return view.extend({
                 var targetUrl = window.location.protocol + '//' + window.location.hostname + ':' + port;
                 this.urlEl.appendChild(E('a', { href: targetUrl, target: '_blank', style: 'font-weight:bold;color:#007bff' }, targetUrl));
             } else {
-                this.urlEl.textContent = '服务未启动';
+                this.urlEl.textContent = _('服务未启动');
             }
         }
     },
@@ -280,7 +280,7 @@ return view.extend({
                 if (data && data.log !== undefined) {
                     self.logData = data.log;
                     if (self.logPre) {
-                        self.logPre.textContent = data.log;
+                        self.logPre.textContent = data.log || _('暂无日志');
                         self.logPre.scrollTop = self.logPre.scrollHeight;
                     }
                     var lowerLog = (data.log || '').toLowerCase();
@@ -311,7 +311,7 @@ return view.extend({
                     });
                 }, 1000);
             } else {
-                ui.addNotification(null, _('操作失败: ') + ((res && res.output) || (res && res.error) || '未知错误'), 'error');
+                ui.addNotification(null, _('操作失败: ') + ((res && res.output) || (res && res.error) || _('未知错误')), 'error');
             }
         }).catch(function(err) {
             ui.hideModal();
@@ -326,12 +326,12 @@ return view.extend({
             this.checkUpdateBtn.textContent = _('检查中...');
         }
         this.fetchUpdate().then(function(res) {
-            var latest = (res && res.latest_version) || '未知';
+            var latest = (res && res.latest_version) || _('未知');
             if (self.latestVersionEl) {
                 self.latestVersionEl.textContent = latest;
             }
             var current = self.statusData ? (self.statusData.version || '') : '';
-            if (latest !== '未知' && latest !== current && self.upgradeBtn) {
+            if (latest !== _('未知') && latest !== current && self.upgradeBtn) {
                 self.upgradeBtn.style.display = '';
             }
         }).catch(function() {
@@ -375,7 +375,7 @@ return view.extend({
             if (data && data.log !== undefined) {
                 self.logData = data.log;
                 if (self.logPre) {
-                    self.logPre.textContent = data.log;
+                    self.logPre.textContent = data.log || _('暂无日志');
                     self.logPre.scrollTop = self.logPre.scrollHeight;
                 }
             }

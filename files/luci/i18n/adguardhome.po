@@ -1,0 +1,148 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: en\n"
+
+msgid "AdGuard Home"
+msgstr "AdGuard Home"
+
+msgid "AdGuard Home 控制中心"
+msgstr "AdGuard Home Control Center"
+
+msgid "实时状态监控 · 服务控制 · 日志查看 · 一键升级"
+msgstr "Real-time Status Monitoring · Service Control · Log Viewer · One-click Upgrade"
+
+msgid "实时仪表盘"
+msgstr "Live Dashboard"
+
+msgid "核心部署"
+msgstr "Core Deployment"
+
+msgid "核心版本"
+msgstr "Core Version"
+
+msgid "服务状态"
+msgstr "Service Status"
+
+msgid "运行状态"
+msgstr "Running Status"
+
+msgid "Web 端口"
+msgstr "Web Port"
+
+msgid "管理入口"
+msgstr "Management URL"
+
+msgid "服务控制台"
+msgstr "Service Console"
+
+msgid "版本更新"
+msgstr "Version Update"
+
+msgid "日志查看器"
+msgstr "Log Viewer"
+
+msgid "启动服务"
+msgstr "Start Service"
+
+msgid "重启服务"
+msgstr "Restart Service"
+
+msgid "停止服务"
+msgstr "Stop Service"
+
+msgid "注册系统服务"
+msgstr "Register System Service"
+
+msgid "检查更新"
+msgstr "Check Update"
+
+msgid "一键升级"
+msgstr "One-click Upgrade"
+
+msgid "刷新日志"
+msgstr "Refresh Log"
+
+msgid "执行中..."
+msgstr "Processing..."
+
+msgid "操作执行成功"
+msgstr "Operation executed successfully"
+
+msgid "操作失败: "
+msgstr "Operation failed: "
+
+msgid "未知错误"
+msgstr "Unknown error"
+
+msgid "执行异常: "
+msgstr "Execution error: "
+
+msgid "检查中..."
+msgstr "Checking..."
+
+msgid "检查失败"
+msgstr "Check failed"
+
+msgid "确认升级"
+msgstr "Confirm Upgrade"
+
+msgid "将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。"
+msgstr "Will download and install the latest version of AdGuard Home core. Service may be briefly interrupted during upgrade."
+
+msgid "取消"
+msgstr "Cancel"
+
+msgid "确认升级"
+msgstr "Confirm Upgrade"
+
+msgid "升级任务已启动，请在下方日志查看器中查看进度"
+msgstr "Upgrade task started, please check the progress in the log viewer below"
+
+msgid "升级任务启动失败"
+msgstr "Upgrade task failed to start"
+
+msgid "升级完成，正在刷新状态"
+msgstr "Upgrade completed, refreshing status"
+
+msgid "未检查"
+msgstr "Not checked"
+
+msgid "暂无日志"
+msgstr "No logs available"
+
+msgid "获取日志失败"
+msgstr "Failed to get logs"
+
+msgid "未知"
+msgstr "Unknown"
+
+msgid "服务未启动"
+msgstr "Service not started"
+
+msgid "当前控制模式："
+msgstr "Current control mode: "
+
+msgid "Init.d 系统服务级调用"
+msgstr "Init.d System Service Level"
+
+msgid "AdGuardHome 二进制直接控制（命令保底）"
+msgstr "AdGuardHome Binary Direct Control (Fallback)"
+
+msgid "当前版本："
+msgstr "Current version: "
+
+msgid "最新版本："
+msgstr "Latest version: "
+
+msgid "✔ 已下载 (/opt/AdGuardHome/AdGuardHome)"
+msgstr "✔ Installed (/opt/AdGuardHome/AdGuardHome)"
+
+msgid "✖ 未发现程序 (请运行官网命令安装)"
+msgstr "✖ Not found (Please run official install command)"
+
+msgid "✔ 已安装系统服务 | ✔ 开机自启已注册"
+msgstr "✔ System service installed | ✔ Auto-start registered"
+
+msgid "⚠️ 未注册服务 (使用二进制保底控制)"
+msgstr "⚠️ Service not registered (Using binary fallback control)"

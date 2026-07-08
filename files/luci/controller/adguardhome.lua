@@ -34,7 +34,7 @@ function get_status()
         service_installed = false,
         running = false,
         pid = nil,
-        version = "未知",
+        version = "",
         port = 3000
     }
 
@@ -103,9 +103,9 @@ end
 
 function check_update()
     local output = util.exec("curl -m 8 -fsSL 'https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest' 2>&1")
-    local latest = "未知"
+    local latest = ""
     if output then
-        latest = output:match('"tag_name"%s*:%s*"(.-)"') or "未知"
+        latest = output:match('"tag_name"%s*:%s*"(.-)"') or ""
     end
     http.prepare_content("application/json")
     http.write_json({ latest_version = latest })
@@ -130,9 +130,6 @@ function get_log()
 
     if log_data == "" then
         log_data = util.exec("logread -e AdGuardHome 2>/dev/null | tail -n 30")
-        if log_data == "" then
-            log_data = "暂无相关运行日志 (若刚启动，请等待几秒后刷新)..."
-        end
     end
 
     http.prepare_content("application/json")
