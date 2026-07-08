@@ -9,6 +9,13 @@ AGH_DIR="/opt/AdGuardHome"
 AGH_BIN="/opt/AdGuardHome/AdGuardHome"
 AGH_INSTALL_URL="https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh"
 
+# GitHub 加速代理列表（国内用户可选）
+PROXY_LIST="
+https://ghfast.top/
+https://gh-proxy.com/
+https://kkgithub.com/
+"
+
 log() {
     ts=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "0000-00-00 00:00:00")
     echo "[$ts] $1"
@@ -20,6 +27,67 @@ echo " AdGuardHome LuCI Dashboard 安装程序"
 echo "========================================================="
 echo ""
 
+# ── GitHub 连通性检测 & 代理选择 ────────────────────
+PROXY_PREFIX=""
+
+# 支持环境变量强制指定代理: GITHUB_PROXY=https://ghfast.top/ sh install.sh
+if [ -n "$GITHUB_PROXY" ]; then
+    PROXY_PREFIX="$GITHUB_PROXY"
+    log "使用环境变量指定代理: $PROXY_PREFIX"
+else
+    # 测试 GitHub 直连（5 秒超时）
+    log "检测 GitHub 连通性..."
+    if curl -fsSL -m 5 -o /dev/null 'https://raw.githubusercontent.com' 2>/dev/null; then
+        log "GitHub 直连正常"
+    else
+        log "GitHub 直连失败或超时，请选择加速代理："
+        echo ""
+        echo "  1) 直连（再试一次）"
+
+        # 动态生成代理选项
+        _idx=2
+        _proxy_names=""
+        for proxy in $PROXY_LIST; do
+            # 提取域名作为显示名
+            _domain=$(echo "$proxy" | sed 's|https\{0,1\}://||;s|/$||')
+            echo "  $_idx) $_domain"
+            _proxy_names="$_proxy_names $proxy"
+            _idx=$((_idx + 1))
+        done
+
+        echo ""
+        printf "请选择 [1-%d，默认 1]: " $((_idx - 1))
+        read -r PROXY_CHOICE
+        PROXY_CHOICE=${PROXY_CHOICE:-1}
+
+        if [ "$PROXY_CHOICE" != "1" ]; then
+            # 从列表中选择对应代理
+            _i=1
+            for proxy in $PROXY_LIST; do
+                if [ "$_i" = "$((PROXY_CHOICE - 1))" ]; then
+                    PROXY_PREFIX="$proxy"
+                    break
+                fi
+                _i=$((_i + 1))
+            done
+            if [ -n "$PROXY_PREFIX" ]; then
+                log "使用代理: $PROXY_PREFIX"
+            else
+                log "无效选择，使用直连"
+            fi
+        fi
+    fi
+fi
+
+# 应用代理到所有 GitHub URL
+if [ -n "$PROXY_PREFIX" ]; then
+    RAW_BASE="${PROXY_PREFIX}https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+    AGH_INSTALL_URL="${PROXY_PREFIX}${AGH_INSTALL_URL}"
+    GH_API_BASE="${PROXY_PREFIX}https://api.github.com"
+else
+    GH_API_BASE="https://api.github.com"
+fi
+
 # ═══════════════════════════════════════════════════════════
 # 第一部分：安装 AdGuard Home 核心
 # ═══════════════════════════════════════════════════════════
@@ -29,13 +97,13 @@ log "── 第一部分：AdGuard Home 核心 ──"
 if [ -f "$AGH_BIN" ]; then
     log "检测到已安装 AdGuard Home ($AGH_BIN)"
 
-    # 获取当前本地版本（兼容 BusyBox，不依赖 grep -o）
-    CURRENT_VER=$("$AGH_BIN" --version 2>&1 | sed -n 's/.*version \(v[0-9.]*\).*/\1/p')
-    [ -z "$CURRENT_VER" ] && CURRENT_VER=$("$AGH_BIN" --version 2>&1 | sed -n 's/.*version \([0-9.]*\).*/v\1/p')
+    # 获取当前本地版本（awk 取最后一个字段，兼容 BusyBox）
+    CURRENT_VER=$("$AGH_BIN" --version 2>&1 | awk '{print $NF}')
+    case "$CURRENT_VER" in v*) ;; *) CURRENT_VER="v$CURRENT_VER" ;; esac
 
     # 获取 GitHub 最新版本
-    LATEST_VER=$(curl -fsSL -m 8 'https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest' 2>/dev/null \
-        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    LATEST_VER=$(curl -fsSL -m 8 "${GH_API_BASE}/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null \
+        | awk -F'"' '/tag_name/{print $4; exit}')
 
     if [ -n "$CURRENT_VER" ] && [ -n "$LATEST_VER" ]; then
         log "当前版本: $CURRENT_VER    最新版本: $LATEST_VER"
@@ -111,10 +179,10 @@ download_from_github() {
     log "从 GitHub 下载 Dashboard 文件..."
     dl() {
         local url="$1" dest="$2"
-        if curl -fsSL -o "$dest" "$url"; then
+        if curl -fsSL -m 30 --connect-timeout 10 --retry 2 -o "$dest" "$url"; then
             log "  ✓ $(basename "$dest")"
         else
-            log "  ✗ 下载失败: $(basename "$dest") ($url)"
+            log "  ✗ 下载失败: $(basename "$dest")"
             rm -rf "$TMPDIR"
             exit 1
         fi
