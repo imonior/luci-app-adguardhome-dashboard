@@ -1,7 +1,4 @@
 #!/bin/sh
-#=============================================================================
-# 🧩 AdGuardHome LuCI Dashboard - 完全自包含安装器 v2.0
-#=============================================================================
 set -e
 
 log() {
@@ -10,6 +7,55 @@ log() {
 }
 
 log "=== AdGuardHome LuCI Dashboard 安装开始 ==="
+
+CONFLICT_FILES=""
+if [ -f "/usr/share/luci/controller/adguardhome.lua" ]; then
+    CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/share/luci/controller/adguardhome.lua"
+fi
+if [ -f "/www/luci-static/resources/view/adguardhome/dashboard.js" ]; then
+    CONFLICT_FILES="$CONFLICT_FILES\n  - /www/luci-static/resources/view/adguardhome/dashboard.js"
+fi
+if [ -f "/usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json" ]; then
+    CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json"
+fi
+if [ -f "/usr/share/luci/menu.d/luci-app-adguardhome.json" ]; then
+    CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/share/luci/menu.d/luci-app-adguardhome.json"
+fi
+if [ -f "/usr/share/rpcd/acl.d/luci-app-adguardhome.json" ]; then
+    CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/share/rpcd/acl.d/luci-app-adguardhome.json"
+fi
+if [ -f "/usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json" ]; then
+    CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json"
+fi
+if [ -f "/usr/lib/lua/luci/i18n/adguardhome.lmo" ]; then
+    CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/lib/lua/luci/i18n/adguardhome.lmo"
+fi
+if [ -f "/usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo" ]; then
+    CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo"
+fi
+
+if [ -n "$CONFLICT_FILES" ]; then
+    echo "⚠️ 检测到已存在 AdGuard Home 相关文件，可能与新版本冲突："
+    echo -e "$CONFLICT_FILES"
+    echo ""
+    read -p "是否删除并继续安装？ [Y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log "用户选择退出安装"
+        exit 0
+    fi
+    log "用户选择删除旧文件并继续安装"
+    
+    rm -f /usr/share/luci/controller/adguardhome.lua
+    rm -rf /www/luci-static/resources/view/adguardhome
+    rm -f /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json
+    rm -f /usr/share/luci/menu.d/luci-app-adguardhome.json
+    rm -f /usr/share/rpcd/acl.d/luci-app-adguardhome.json
+    rm -f /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json
+    rm -f /usr/lib/lua/luci/i18n/adguardhome.lmo
+    rm -f /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo
+    log "已删除所有旧文件"
+fi
 
 mkdir -p /usr/share/luci/controller /usr/share/rpcd/acl.d /usr/lib/lua/luci/i18n /www/luci-static/resources/view/adguardhome
 
@@ -61,7 +107,7 @@ local function find_init_script()
 end
 
 function index()
-    entry({"admin", "services", "adguardhome"}, template("adguardhome/dashboard"), _("AdGuard Home"), 60)
+    entry({"admin", "services", "adguardhome"}, template("adguardhome/dashboard"), _("AdGuard Home"), 60).dependent = false
     entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, true)
     entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, true)
     entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, true)
@@ -76,7 +122,8 @@ function get_status()
         pid = nil,
         version = "",
         port = 3000,
-        bin_path = ""
+        bin_path = "",
+        init_script = ""
     }
 
     local bin_path = find_binary()
@@ -85,6 +132,7 @@ function get_status()
     status.installed = bin_path ~= nil
     status.service_installed = init_script ~= nil
     status.bin_path = bin_path or ""
+    status.init_script = init_script or ""
 
     local pid_out = util.exec("pgrep -f 'AdGuardHome' 2>/dev/null")
     local pid = pid_out and pid_out:match("(%d+)") or nil
@@ -300,7 +348,6 @@ compile({
     ["确认升级"] = "Confirm Upgrade",
     ["将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。"] = "Will download and install the latest AdGuard Home version. Service may be temporarily interrupted during upgrade.",
     ["取消"] = "Cancel",
-    ["确认升级"] = "Confirm Upgrade",
     ["升级任务已启动，状态将自动刷新"] = "Upgrade task started, status will refresh automatically",
     ["升级任务启动失败"] = "Upgrade task failed to start"
 }, '/usr/lib/lua/luci/i18n/adguardhome.lmo')
@@ -353,7 +400,6 @@ compile({
     ["确认升级"] = "确认升级",
     ["将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。"] = "将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。",
     ["取消"] = "取消",
-    ["确认升级"] = "确认升级",
     ["升级任务已启动，状态将自动刷新"] = "升级任务已启动，状态将自动刷新",
     ["升级任务启动失败"] = "升级任务启动失败"
 }, '/usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo')
@@ -463,84 +509,108 @@ return view.extend({
         }, _('一键升级'));
         this.upgradeBtn = upgradeBtn;
 
-        var node = E('div', { class: 'cbi-map' }, [
-            E('h2', {}, _('AdGuard Home 控制中心')),
-            E('div', { class: 'cbi-map-descr' }, _('实时状态监控 · 服务控制 · 一键升级')),
+        var startBtn = E('button', {
+            class: 'btn cbi-button cbi-button-action',
+            style: 'margin-right:10px',
+            click: function() { self.execAction('start'); }
+        }, _('启动服务'));
 
-            E('div', { class: 'cbi-section' }, [
-                E('h3', {}, _('实时仪表盘')),
-                E('table', { class: 'table cbi-section-table', style: 'width:100%; max-width:650px;' }, [
-                    E('tr', { class: 'tr' }, [
-                        E('td', { class: 'td', style: 'width:32%;font-weight:bold' }, _('核心部署')),
-                        E('td', { class: 'td' }, isBinInstalled
-                            ? E('span', { style: 'color:#2dca73;font-weight:bold' }, _('✔ 已下载') + ' (' + (status.bin_path || '/opt/AdGuardHome/AdGuardHome') + ')')
-                            : E('span', { style: 'color:#e74c3c;font-weight:bold' }, _('✖ 未发现程序 (请运行官网命令安装)'))
-                        )
-                    ]),
-                    E('tr', { class: 'tr' }, [
-                        E('td', { class: 'td', style: 'font-weight:bold' }, _('核心版本')),
-                        E('td', { class: 'td' }, [versionCode])
-                    ]),
-                    E('tr', { class: 'tr' }, [
-                        E('td', { class: 'td', style: 'font-weight:bold' }, _('服务状态')),
-                        E('td', { class: 'td' }, isServiceInstalled
-                            ? E('span', { style: 'color:#2dca73' }, _('✔ 已安装系统服务 | ✔ 开机自启已注册'))
-                            : E('span', { style: 'color:#f39c12;font-weight:bold' }, _('⚠️ 未注册服务 (使用二进制保底控制)'))
-                        )
-                    ]),
-                    E('tr', { class: 'tr' }, [
-                        E('td', { class: 'td', style: 'font-weight:bold' }, _('运行状态')),
-                        E('td', { class: 'td' }, [runningSpan])
-                    ]),
-                    E('tr', { class: 'tr' }, [
-                        E('td', { class: 'td', style: 'font-weight:bold' }, _('Web 端口')),
-                        E('td', { class: 'td' }, [portSpan])
-                    ]),
-                    E('tr', { class: 'tr' }, [
-                        E('td', { class: 'td', style: 'font-weight:bold' }, _('管理入口')),
-                        E('td', { class: 'td' }, [urlContainer])
-                    ])
-                ])
-            ]),
+        var restartBtn = E('button', {
+            class: 'btn cbi-button cbi-button-action',
+            style: 'margin-right:10px',
+            click: function() { self.execAction('restart'); }
+        }, _('重启服务'));
 
-            E('div', { class: 'cbi-section' }, [
-                E('h3', {}, _('服务控制台')),
-                E('div', { style: 'padding:15px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px' }, [
-                    E('div', { style: 'margin-bottom:12px;' }, [
-                        E('strong', {}, _('当前控制模式：')),
-                        E('span', { style: isServiceInstalled ? 'color:#2dca73;font-weight:bold' : 'color:#f39c12;font-weight:bold' },
-                            isServiceInstalled ? _('Init.d 系统服务级调用') : _('AdGuardHome 二进制直接控制（命令保底）'))
-                    ]),
-                    E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-right:10px', click: function() { self.execAction('start'); } }, _('启动服务')),
-                    E('button', { class: 'btn cbi-button cbi-button-action', style: 'margin-right:10px', click: function() { self.execAction('restart'); } }, _('重启服务')),
-                    E('button', { class: 'btn cbi-button cbi-button-reset', style: 'margin-right:10px', click: function() { self.execAction('stop'); } }, _('停止服务')),
-                    !isServiceInstalled ? E('button', { class: 'btn cbi-button cbi-button-apply', style: 'background-color:#9b59b6;color:#ffffff!important; text-shadow:0 -1px 0 rgba(0,0,0,0.3); font-weight:bold' }, _('注册系统服务')) : ''
-                ])
-            ]),
+        var stopBtn = E('button', {
+            class: 'btn cbi-button cbi-button-danger',
+            style: 'margin-right:10px',
+            click: function() { self.execAction('stop'); }
+        }, _('停止服务'));
 
-            E('div', { class: 'cbi-section' }, [
-                E('h3', {}, _('版本更新')),
-                E('div', { style: 'padding:15px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px' }, [
-                    E('div', { style: 'margin-bottom:12px;' }, [
-                        E('strong', {}, _('当前版本：')),
-                        E('code', { style: 'margin-right:20px' }, versionStr),
-                        E('strong', {}, _('最新版本：')),
-                        latestVersionCode
-                    ]),
-                    checkUpdateBtn,
-                    upgradeBtn
+        var installServiceBtn = E('button', {
+            class: 'btn cbi-button cbi-button-apply',
+            style: 'color:#ffffff!important',
+            click: function() { self.execAction('install_service'); }
+        }, _('注册系统服务'));
+
+        var statusBlock = E('div', { style: 'margin-bottom:20px' }, [
+            E('h3', { style: 'font-size:16px;margin-bottom:15px;padding-bottom:8px;border-bottom:1px solid #eee' }, _('实时仪表盘')),
+            E('table', { style: 'width:100%;border-collapse:collapse' }, [
+                E('tr', {}, [
+                    E('td', { style: 'padding:10px;width:120px;background:#f8f9fa;font-weight:bold' }, _('核心部署')),
+                    E('td', { style: 'padding:10px' }, isBinInstalled
+                        ? E('span', { style: 'color:#2dca73;font-weight:bold' }, '✓ ' + (status.bin_path || _('已安装')))
+                        : E('span', { style: 'color:#e74c3c;font-weight:bold' }, '✖ ' + _('未发现程序') + ' (' + _('请运行官网命令安装') + ')')
+                    )
+                ]),
+                E('tr', {}, [
+                    E('td', { style: 'padding:10px;width:120px;background:#f8f9fa;font-weight:bold' }, _('核心版本')),
+                    E('td', { style: 'padding:10px' }, versionCode)
+                ]),
+                E('tr', {}, [
+                    E('td', { style: 'padding:10px;width:120px;background:#f8f9fa;font-weight:bold' }, _('服务状态')),
+                    E('td', { style: 'padding:10px' }, isServiceInstalled
+                        ? E('span', { style: 'color:#2dca73;font-weight:bold' }, '✓ ' + (status.init_script || _('已注册')))
+                        : E('span', { style: 'color:#f39c12;font-weight:bold' }, '⚠️ ' + _('未注册服务') + ' (' + _('使用二进制保底控制') + ')')
+                    )
+                ]),
+                E('tr', {}, [
+                    E('td', { style: 'padding:10px;width:120px;background:#f8f9fa;font-weight:bold' }, _('运行状态')),
+                    E('td', { style: 'padding:10px' }, runningSpan)
+                ]),
+                E('tr', {}, [
+                    E('td', { style: 'padding:10px;width:120px;background:#f8f9fa;font-weight:bold' }, _('Web 端口')),
+                    E('td', { style: 'padding:10px' }, portSpan)
+                ]),
+                E('tr', {}, [
+                    E('td', { style: 'padding:10px;width:120px;background:#f8f9fa;font-weight:bold' }, _('管理入口')),
+                    E('td', { style: 'padding:10px' }, urlContainer)
                 ])
             ])
         ]);
 
-        this.rootNode = node;
-        this.startPolling();
+        var controlBlock = E('div', { style: 'margin-bottom:20px' }, [
+            E('h3', { style: 'font-size:16px;margin-bottom:15px;padding-bottom:8px;border-bottom:1px solid #eee' }, _('服务控制台')),
+            E('p', { style: 'color:#666;margin-bottom:15px' }, _('当前控制模式') + ': ' + (isServiceInstalled ? _('Init.d 系统服务级调用') : _('AdGuardHome 二进制直接控制') + ' (' + _('命令保底') + ')')),
+            E('div', {}, [
+                isBinInstalled ? startBtn : null,
+                isBinInstalled ? restartBtn : null,
+                isRunning ? stopBtn : null,
+                !isServiceInstalled && isBinInstalled ? installServiceBtn : null
+            ].filter(Boolean))
+        ]);
 
-        return node;
+        var updateBlock = E('div', {}, [
+            E('h3', { style: 'font-size:16px;margin-bottom:15px;padding-bottom:8px;border-bottom:1px solid #eee' }, _('版本更新')),
+            E('p', { style: 'margin-bottom:15px' }, [
+                _('当前版本') + ': ',
+                E('code', {}, versionStr),
+                E('span', { style: 'margin-left:20px' }, _('最新版本') + ': '),
+                latestVersionCode,
+                isBinInstalled ? checkUpdateBtn : null,
+                isBinInstalled ? upgradeBtn : null
+            ])
+        ]);
+
+        var page = E('div', { style: 'padding:20px' }, [
+            E('h2', { style: 'font-size:20px;margin-bottom:5px' }, _('AdGuardHome 控制中心')),
+            E('p', { style: 'color:#666;margin-bottom:20px' }, _('实时状态监控') + ' · ' + _('服务控制') + ' · ' + _('一键升级')),
+            statusBlock,
+            controlBlock,
+            updateBlock
+        ]);
+
+        this.rootNode = page;
+        return page;
     },
+
+    handleSaveApply: null,
+    handleSave: null,
+    handleReset: null,
 
     updateStatusUI: function(status) {
         this.statusData = status;
+
         var isRunning = !!status.running;
         var pid = status.pid || '—';
         var versionStr = status.version || _('未知');
@@ -655,11 +725,7 @@ return view.extend({
                 }}, _('确认升级'))
             ])
         ]);
-    },
-
-    handleSaveApply: null,
-    handleSave: null,
-    handleReset: null
+    }
 });
 EOF
 
