@@ -15,6 +15,9 @@ fi
 if [ -f "/usr/share/luci/controller/adguardhome.lua" ]; then
     CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/share/luci/controller/adguardhome.lua"
 fi
+if [ -f "/usr/lib/lua/luci/view/adguardhome/dashboard.htm" ]; then
+    CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/lib/lua/luci/view/adguardhome/dashboard.htm"
+fi
 if [ -f "/www/luci-static/resources/view/adguardhome/dashboard.js" ]; then
     CONFLICT_FILES="$CONFLICT_FILES\n  - /www/luci-static/resources/view/adguardhome/dashboard.js"
 fi
@@ -51,6 +54,7 @@ if [ -n "$CONFLICT_FILES" ]; then
     
     rm -f /usr/lib/lua/luci/controller/adguardhome.lua
     rm -f /usr/share/luci/controller/adguardhome.lua
+    rm -rf /usr/lib/lua/luci/view/adguardhome
     rm -rf /www/luci-static/resources/view/adguardhome
     rm -f /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json
     rm -f /usr/share/luci/menu.d/luci-app-adguardhome.json
@@ -61,7 +65,7 @@ if [ -n "$CONFLICT_FILES" ]; then
     log "已删除所有旧文件"
 fi
 
-mkdir -p /usr/lib/lua/luci/controller /usr/share/rpcd/acl.d /usr/lib/lua/luci/i18n /www/luci-static/resources/view/adguardhome /usr/share/luci/menu.d
+mkdir -p /usr/lib/lua/luci/controller /usr/lib/lua/luci/view/adguardhome /usr/share/rpcd/acl.d /usr/lib/lua/luci/i18n /www/luci-static/resources/view/adguardhome /usr/share/luci/menu.d
 
 cat > /usr/lib/lua/luci/controller/adguardhome.lua << 'LUAEOF'
 module("luci.controller.adguardhome", package.seeall)
@@ -241,6 +245,43 @@ function do_upgrade()
     http.write_json({ success = true })
 end
 LUAEOF
+
+cat > /usr/lib/lua/luci/view/adguardhome/dashboard.htm << 'HTMEOF'
+<%#
+AdGuardHome Dashboard View
+-%>
+<%
+luci.http.prepare_content("text/html")
+%>
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="<%=luci.i18n.lang()%>">
+<head>
+    <meta charset="utf-8" />
+    <title><%=pcdata(_("AdGuard Home"))%></title>
+    <link rel="stylesheet" href="<%=resource%>/cascade.css" />
+    <script src="<%=resource%>/lib/luci.js"></script>
+</head>
+<body class="cbi">
+    <div id="maincontainer">
+        <div id="maincontent">
+            <div id="tabmenu">
+                <ul>
+                    <li class="active"><a href="<%=url("admin/services/adguardhome")%>"><%=_("AdGuard Home")%></a></li>
+                </ul>
+            </div>
+            <div id="content">
+                <%- include("header") -%>
+                <div id="cbi-page"></div>
+            </div>
+        </div>
+    </div>
+    <script>
+        require('view/adguardhome/dashboard');
+    </script>
+</body>
+</html>
+HTMEOF
 
 cat > /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json << 'EOF'
 {
@@ -738,6 +779,7 @@ return view.extend({
 EOF
 
 chmod 644 /usr/lib/lua/luci/controller/adguardhome.lua \
+          /usr/lib/lua/luci/view/adguardhome/dashboard.htm \
           /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json \
           /usr/lib/lua/luci/i18n/adguardhome.lmo \
           /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo \
