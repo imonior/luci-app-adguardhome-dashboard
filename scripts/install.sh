@@ -14,18 +14,35 @@ TMP="/tmp/agh_dashboard_install"
 LOG="/etc/adguardhome-dashboard.log"
 
 log() {
-    local ts
     ts=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "0000-00-00 00:00:00")
     echo "[$ts] $1" | tee -a "$LOG"
 }
 
+check_certs() {
+    if ! curl -fsSL --connect-timeout 3 https://github.com 2>/dev/null; then
+        log "⚠️ 检测到 TLS 证书问题，尝试安装证书..."
+        if command -v apk >/dev/null 2>&1; then
+            apk update >/dev/null 2>&1 && apk add -q ca-certificates curl
+        elif command -v opkg >/dev/null 2>&1; then
+            opkg update >/dev/null 2>&1 && opkg install ca-certificates curl
+        elif command -v apt-get >/dev/null 2>&1; then
+            apt-get update >/dev/null 2>&1 && apt-get install -y ca-certificates curl
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y ca-certificates curl
+        else
+            log "❌ 无法自动安装证书，请手动安装 ca-certificates 后重试"
+            exit 1
+        fi
+        log "✅ 证书安装完成"
+    fi
+}
+
 download() {
-    local url="$1"
-    local out="$2"
-    local i=0
+    url="$1"
+    out="$2"
+    i=0
     while [ $i -lt 3 ]; do
-        if curl -fsSL --connect-timeout 6 "$url" -o "$out"; then
-            local size
+        if curl -fsSL --tlsv1.2 --connect-timeout 6 "$url" -o "$out"; then
             size=$(wc -c < "$out" 2>/dev/null || echo 0)
             [ "$size" -gt 30 ] && return 0
         fi
@@ -38,41 +55,51 @@ download() {
 }
 
 detect_conflict() {
-    local conflicts=()
-    
+    conflict_count=0
+    conflict_list=""
+
     if [ -f "$MENU_DIR/luci-app-adguardhome.json" ]; then
-        conflicts+=("$MENU_DIR/luci-app-adguardhome.json")
+        conflict_list="$conflict_list $MENU_DIR/luci-app-adguardhome.json"
+        conflict_count=$((conflict_count+1))
     fi
     if [ -f "$ACL_DIR/luci-app-adguardhome.json" ]; then
-        conflicts+=("$ACL_DIR/luci-app-adguardhome.json")
+        conflict_list="$conflict_list $ACL_DIR/luci-app-adguardhome.json"
+        conflict_count=$((conflict_count+1))
     fi
     if [ -f "/usr/share/luci/controller/adguardhome.lua" ]; then
-        conflicts+=("/usr/share/luci/controller/adguardhome.lua")
+        conflict_list="$conflict_list /usr/share/luci/controller/adguardhome.lua"
+        conflict_count=$((conflict_count+1))
     fi
     if [ -f "$VIEW_DIR/dashboard.js" ]; then
-        conflicts+=("$VIEW_DIR/dashboard.js")
+        conflict_list="$conflict_list $VIEW_DIR/dashboard.js"
+        conflict_count=$((conflict_count+1))
     fi
 
-    if [ ${#conflicts[@]} -gt 0 ]; then
+    if [ $conflict_count -gt 0 ]; then
         echo ""
         echo "⚠️ 检测到已存在旧版 AdGuard Home 仪表盘文件："
-        for f in "${conflicts[@]}"; do
+        for f in $conflict_list; do
             echo "   - $f"
         done
         echo ""
         echo "这些文件可能与新版本冲突，是否删除并继续安装？"
         echo ""
-        read -p "请输入 [Y] 删除并安装 / [N] 退出安装: " -n 1 -r
+        printf "请输入 [Y] 删除并安装 / [N] 退出安装: "
+        read REPLY
         echo ""
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            log "用户选择退出安装"
-            exit 0
-        fi
-        log "用户选择删除旧文件并继续安装"
-        for f in "${conflicts[@]}"; do
-            rm -f "$f" 2>/dev/null || true
-            log "已删除: $f"
-        done
+        case "$REPLY" in
+            [Yy])
+                log "用户选择删除旧文件并继续安装"
+                for f in $conflict_list; do
+                    rm -f "$f" 2>/dev/null || true
+                    log "已删除: $f"
+                done
+                ;;
+            *)
+                log "用户选择退出安装"
+                exit 0
+                ;;
+        esac
     else
         log "未检测到冲突文件，继续安装"
     fi
@@ -83,9 +110,9 @@ install_agh() {
         log "AdGuardHome 核心二进制文件已存在 → 跳过核心安装"
         return
     fi
-    
+
     log "🚀 未检测到 AdGuardHome 核心，正在调用官方脚本进行无人值守安装..."
-    curl -fsSL https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh || {
+    curl -fsSL --tlsv1.2 https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh || {
         log "❌ 核心服务安装失败，请检查网络连接。"
         exit 1
     }
@@ -95,7 +122,7 @@ fetch() {
     rm -rf "$TMP"
     mkdir -p "$TMP"
     log "📦 开始从 GitHub 仓库拉取最新的轻量级仪表盘资产..."
-    
+
     download "$BASE/files/luci/menu.json" "$TMP/menu.json"
     download "$BASE/files/luci/acl.json" "$TMP/acl.json"
     download "$BASE/files/luci/controller/adguardhome.lua" "$TMP/adguardhome.lua"
@@ -145,10 +172,10 @@ restart_luci() {
            /tmp/luci-modulecache \
            /tmp/luci-htmlcache \
            /tmp/luci-cbi-* 2>/dev/null || true
-    
+
     log "🔄 正在重启系统权限总线精灵进程 (rpcd)..."
     /etc/init.d/rpcd restart 2>/dev/null || true
-    
+
     log "🔄 正在重启 Web 核心服务 (uhttpd)..."
     /etc/init.d/uhttpd restart 2>/dev/null || true
 }
@@ -165,15 +192,16 @@ verify() {
 
 main() {
     log "=== AdGuardHome 极简仪表盘部署开始 ==="
+    check_certs
     install_agh
     detect_conflict
     fetch
     apply
     restart_luci
     verify
-    
+
     rm -rf "$TMP"
-    
+
     log "=== 部署流程完美结束 ==="
     echo "========================================================="
     echo " ✅ AdGuardHome LuCI Dashboard 安装/更新成功！"
