@@ -9,19 +9,32 @@
 
 ## 安装 / Install
 
-将项目克隆或复制到路由器后，在项目目录内运行：
+### 一键安装（推荐）
+
+```sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
+```
+
+安装脚本分两步执行：
+
+1. **AdGuard Home 核心** — 检测 `/opt/AdGuardHome/AdGuardHome` 是否已安装，未安装则调用官方脚本自动安装；已安装则可选择覆盖安装（自动停止运行中的服务）或跳过
+2. **LuCI Dashboard** — 从 GitHub 下载菜单注册、Lua Controller、JS View、翻译等文件到临时目录，部署到系统对应位置
+
+### 从本地项目安装
+
+如果已将项目克隆到路由器，在项目目录内运行会自动使用本地文件（无需联网下载）：
 
 ```sh
 cd /path/to/luci-app-adguardhome-dashboard
 sh scripts/install.sh
 ```
 
-> `install.sh` 同时支持安装和更新（幂等），自动清理旧版本文件。
+> `install.sh` 支持安装和更新（幂等），自动清理旧版本文件。
 
 ## 卸载 / Uninstall
 
 ```sh
-sh scripts/uninstall.sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/uninstall.sh)"
 ```
 
 ---
@@ -44,7 +57,7 @@ sh scripts/uninstall.sh
 ```text
 luci-app-adguardhome-dashboard/
 ├── scripts/
-│   ├── install.sh        # 安装/更新脚本（文件复制模式）
+│   ├── install.sh        # 安装/更新脚本（Part1: AGH核心 Part2: Dashboard文件）
 │   └── uninstall.sh      # 卸载脚本
 ├── files/
 │   ├── luci/
