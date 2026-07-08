@@ -9,6 +9,9 @@ log() {
 log "=== AdGuardHome LuCI Dashboard 安装开始 ==="
 
 CONFLICT_FILES=""
+if [ -f "/usr/lib/lua/luci/controller/adguardhome.lua" ]; then
+    CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/lib/lua/luci/controller/adguardhome.lua"
+fi
 if [ -f "/usr/share/luci/controller/adguardhome.lua" ]; then
     CONFLICT_FILES="$CONFLICT_FILES\n  - /usr/share/luci/controller/adguardhome.lua"
 fi
@@ -46,6 +49,7 @@ if [ -n "$CONFLICT_FILES" ]; then
     fi
     log "用户选择删除旧文件并继续安装"
     
+    rm -f /usr/lib/lua/luci/controller/adguardhome.lua
     rm -f /usr/share/luci/controller/adguardhome.lua
     rm -rf /www/luci-static/resources/view/adguardhome
     rm -f /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json
@@ -57,9 +61,9 @@ if [ -n "$CONFLICT_FILES" ]; then
     log "已删除所有旧文件"
 fi
 
-mkdir -p /usr/share/luci/controller /usr/share/rpcd/acl.d /usr/lib/lua/luci/i18n /www/luci-static/resources/view/adguardhome
+mkdir -p /usr/lib/lua/luci/controller /usr/share/rpcd/acl.d /usr/lib/lua/luci/i18n /www/luci-static/resources/view/adguardhome /usr/share/luci/menu.d
 
-cat > /usr/share/luci/controller/adguardhome.lua << 'LUAEOF'
+cat > /usr/lib/lua/luci/controller/adguardhome.lua << 'LUAEOF'
 module("luci.controller.adguardhome", package.seeall)
 
 local util = require "luci.util"
@@ -107,11 +111,15 @@ local function find_init_script()
 end
 
 function index()
-    entry({"admin", "services", "adguardhome"}, template("adguardhome/dashboard"), _("AdGuard Home"), 60).dependent = false
+    entry({"admin", "services", "adguardhome"}, call("index_action"), _("AdGuard Home"), 60).dependent = false
     entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, true)
     entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, true)
     entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, true)
     entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
+end
+
+function index_action()
+    luci.template.render("adguardhome/dashboard")
 end
 
 function get_status()
@@ -729,7 +737,7 @@ return view.extend({
 });
 EOF
 
-chmod 644 /usr/share/luci/controller/adguardhome.lua \
+chmod 644 /usr/lib/lua/luci/controller/adguardhome.lua \
           /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json \
           /usr/lib/lua/luci/i18n/adguardhome.lmo \
           /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo \
