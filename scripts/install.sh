@@ -4,10 +4,8 @@
 #=============================================================================
 set -e
 
-# 项目远程主仓基地址
 BASE="https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main"
 
-# 系统标准路径变量
 MENU_DIR="/usr/share/luci/menu.d"
 ACL_DIR="/usr/share/rpcd/acl.d"
 VIEW_DIR="/www/luci-static/resources/view/adguardhome"
@@ -15,16 +13,12 @@ VIEW_DIR="/www/luci-static/resources/view/adguardhome"
 TMP="/tmp/agh_dashboard_install"
 LOG="/etc/adguardhome-dashboard.log"
 
-# 统一日志输出
 log() {
     local ts
     ts=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "0000-00-00 00:00:00")
     echo "[$ts] $1" | tee -a "$LOG"
 }
 
-###############################################################################
-# 1. 健壮的下载器（带重试机制、超时控制与文件完整性基础校验）
-###############################################################################
 download() {
     local url="$1"
     local out="$2"
@@ -33,7 +27,6 @@ download() {
         if curl -fsSL --connect-timeout 6 "$url" -o "$out"; then
             local size
             size=$(wc -c < "$out" 2>/dev/null || echo 0)
-            # 确保下载的文件不是空的或者报错网页（至少大于 30 字节）
             [ "$size" -gt 30 ] && return 0
         fi
         i=$((i+1))
@@ -44,11 +37,48 @@ download() {
     exit 1
 }
 
-###############################################################################
-# 2. 核心服务环境审计
-###############################################################################
+detect_conflict() {
+    local conflicts=()
+    
+    if [ -f "$MENU_DIR/luci-app-adguardhome.json" ]; then
+        conflicts+=("$MENU_DIR/luci-app-adguardhome.json")
+    fi
+    if [ -f "$ACL_DIR/luci-app-adguardhome.json" ]; then
+        conflicts+=("$ACL_DIR/luci-app-adguardhome.json")
+    fi
+    if [ -f "/usr/share/luci/controller/adguardhome.lua" ]; then
+        conflicts+=("/usr/share/luci/controller/adguardhome.lua")
+    fi
+    if [ -f "$VIEW_DIR/dashboard.js" ]; then
+        conflicts+=("$VIEW_DIR/dashboard.js")
+    fi
+
+    if [ ${#conflicts[@]} -gt 0 ]; then
+        echo ""
+        echo "⚠️ 检测到已存在旧版 AdGuard Home 仪表盘文件："
+        for f in "${conflicts[@]}"; do
+            echo "   - $f"
+        done
+        echo ""
+        echo "这些文件可能与新版本冲突，是否删除并继续安装？"
+        echo ""
+        read -p "请输入 [Y] 删除并安装 / [N] 退出安装: " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log "用户选择退出安装"
+            exit 0
+        fi
+        log "用户选择删除旧文件并继续安装"
+        for f in "${conflicts[@]}"; do
+            rm -f "$f" 2>/dev/null || true
+            log "已删除: $f"
+        done
+    else
+        log "未检测到冲突文件，继续安装"
+    fi
+}
+
 install_agh() {
-    # 动态探测系统多路径，防止重复下载二进制
     if [ -x /opt/AdGuardHome/AdGuardHome ] || [ -x /usr/bin/AdGuardHome ] || [ -x /usr/sbin/AdGuardHome ]; then
         log "AdGuardHome 核心二进制文件已存在 → 跳过核心安装"
         return
@@ -61,14 +91,12 @@ install_agh() {
     }
 }
 
-###############################################################################
-# 3. 远端资产拉取
-###############################################################################
 fetch() {
     rm -rf "$TMP"
     mkdir -p "$TMP"
     log "📦 开始从 GitHub 仓库拉取最新的轻量级仪表盘资产..."
     
+    download "$BASE/files/luci/menu.json" "$TMP/menu.json"
     download "$BASE/files/luci/acl.json" "$TMP/acl.json"
     download "$BASE/files/luci/controller/adguardhome.lua" "$TMP/adguardhome.lua"
     download "$BASE/files/luci/i18n/adguardhome.po" "$TMP/adguardhome.po"
@@ -78,22 +106,15 @@ fetch() {
     download "$BASE/files/view/dashboard.js" "$TMP/dashboard.js"
 }
 
-###############################################################################
-# 4. 资产分发与权限洗白
-###############################################################################
 apply() {
     log "清理并确立目标系统目录拓扑结构..."
     mkdir -p "$MENU_DIR" "$ACL_DIR" "$VIEW_DIR"
 
-    # 强行删除可能存在的旧残留、或者人为修改过的不规范 ACL 越权文件
     rm -f "$ACL_DIR/luci-app-adguardhome-dashboard.json" 2>/dev/null || true
-
-    # 清理旧版 luci-app-adguardhome 的菜单残留，避免重复入口
-    rm -f "$MENU_DIR/luci-app-adguardhome.json" 2>/dev/null || true
-    rm -f "$ACL_DIR/luci-app-adguardhome.json" 2>/dev/null || true
 
     log "分发各组件至系统对应的路由、权限和视图沙箱..."
     mkdir -p /usr/share/luci/controller /usr/share/luci/i18n /usr/lib/lua/luci/i18n
+    cp "$TMP/menu.json" "$MENU_DIR/luci-app-adguardhome-dashboard.json"
     cp "$TMP/acl.json" "$ACL_DIR/luci-app-adguardhome-dashboard.json"
     cp "$TMP/adguardhome.lua" /usr/share/luci/controller/adguardhome.lua
     cp "$TMP/adguardhome.po" /usr/share/luci/i18n/adguardhome.po
@@ -108,7 +129,8 @@ apply() {
     echo "v2.0-Full" > /etc/adguardhome-dashboard.version
 
     log "规范化文件系统权限 (遵循 Linux 只读静态分发规范)..."
-    chmod 644 "$ACL_DIR/luci-app-adguardhome-dashboard.json" \
+    chmod 644 "$MENU_DIR/luci-app-adguardhome-dashboard.json" \
+              "$ACL_DIR/luci-app-adguardhome-dashboard.json" \
               /usr/share/luci/controller/adguardhome.lua \
               /usr/share/luci/i18n/adguardhome.po \
               /usr/share/luci/i18n/adguardhome.zh-cn.po \
@@ -117,12 +139,8 @@ apply() {
               "$VIEW_DIR/dashboard.js" 2>/dev/null || true
 }
 
-###############################################################################
-# 5. 强刷缓存机制（根治页面不刷新、菜单不显示的通病）
-###############################################################################
 restart_luci() {
     log "⚡ 正在强制粉碎 LuCI 菜单缓存与模块路由索引..."
-    # 这是让新菜单和新 ACL 规矩立刻生效的核心，不能只靠重启 rpcd
     rm -rf /tmp/luci-indexcache \
            /tmp/luci-modulecache \
            /tmp/luci-htmlcache \
@@ -135,9 +153,6 @@ restart_luci() {
     /etc/init.d/uhttpd restart 2>/dev/null || true
 }
 
-###############################################################################
-# 6. 回调验证
-###############################################################################
 verify() {
     if [ -f "$VIEW_DIR/dashboard.js" ] && [ -f "$ACL_DIR/luci-app-adguardhome-dashboard.json" ] && \
        [ -f /usr/share/luci/controller/adguardhome.lua ]; then
@@ -148,18 +163,15 @@ verify() {
     fi
 }
 
-###############################################################################
-# 🚀 主控制流
-###############################################################################
 main() {
     log "=== AdGuardHome 极简仪表盘部署开始 ==="
     install_agh
+    detect_conflict
     fetch
     apply
     restart_luci
     verify
     
-    # 善后清理
     rm -rf "$TMP"
     
     log "=== 部署流程完美结束 ==="

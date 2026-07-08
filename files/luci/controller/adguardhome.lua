@@ -47,11 +47,15 @@ local function find_init_script()
 end
 
 function index()
-    entry({"admin", "services", "adguardhome"}, template("adguardhome/dashboard"), _("AdGuard Home"), 60)
-    entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, true)
-    entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, true)
-    entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, true)
-    entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
+    local e
+    e = entry({"admin", "services", "adguardhome", "status"}, call("get_status"))
+    e.leaf = true
+    e = entry({"admin", "services", "adguardhome", "action"}, call("do_action"))
+    e.leaf = true
+    e = entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"))
+    e.leaf = true
+    e = entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"))
+    e.leaf = true
 end
 
 function get_status()
