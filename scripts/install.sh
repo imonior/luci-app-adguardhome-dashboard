@@ -74,6 +74,8 @@ fetch() {
     download "$BASE/files/luci/controller/adguardhome.lua" "$TMP/adguardhome.lua"
     download "$BASE/files/luci/i18n/adguardhome.po" "$TMP/adguardhome.po"
     download "$BASE/files/luci/i18n/adguardhome.zh-cn.po" "$TMP/adguardhome.zh-cn.po"
+    download "$BASE/files/luci/i18n/adguardhome.lmo" "$TMP/adguardhome.lmo"
+    download "$BASE/files/luci/i18n/adguardhome.zh-cn.lmo" "$TMP/adguardhome.zh-cn.lmo"
     download "$BASE/files/view/dashboard.js" "$TMP/dashboard.js"
 }
 
@@ -87,6 +89,10 @@ apply() {
     # 强行删除可能存在的旧残留、或者人为修改过的不规范 ACL 越权文件
     rm -f "$ACL_DIR/luci-app-adguardhome-dashboard.json" 2>/dev/null || true
 
+    # 清理旧版 luci-app-adguardhome 的菜单残留，避免重复入口
+    rm -f "$MENU_DIR/luci-app-adguardhome.json" 2>/dev/null || true
+    rm -f "$ACL_DIR/luci-app-adguardhome.json" 2>/dev/null || true
+
     log "分发各组件至系统对应的路由、权限和视图沙箱..."
     mkdir -p /usr/share/luci/controller /usr/share/luci/i18n /usr/lib/lua/luci/i18n
     cp "$TMP/menu.json" "$MENU_DIR/luci-app-adguardhome-dashboard.json"
@@ -94,16 +100,11 @@ apply() {
     cp "$TMP/adguardhome.lua" /usr/share/luci/controller/adguardhome.lua
     cp "$TMP/adguardhome.po" /usr/share/luci/i18n/adguardhome.po
     cp "$TMP/adguardhome.zh-cn.po" /usr/share/luci/i18n/adguardhome.zh-cn.po
+    cp "$TMP/adguardhome.lmo" /usr/lib/lua/luci/i18n/adguardhome.lmo
+    cp "$TMP/adguardhome.zh-cn.lmo" /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo
     cp "$TMP/dashboard.js" "$VIEW_DIR/dashboard.js"
 
-    log "编译 i18n 翻译文件 (.po -> .lmo)..."
-    if command -v po2lmo >/dev/null 2>&1; then
-        po2lmo /usr/share/luci/i18n/adguardhome.po /usr/lib/lua/luci/i18n/adguardhome.lmo
-        po2lmo /usr/share/luci/i18n/adguardhome.zh-cn.po /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo
-        log "i18n 翻译文件编译成功"
-    else
-        log "⚠️ po2lmo 工具未找到，跳过翻译文件编译（部分系统可能需要手动安装 luci-base）"
-    fi
+    log "i18n 翻译文件部署成功"
 
     log "写入本地版本锚定标记..."
     echo "v2.0-Full" > /etc/adguardhome-dashboard.version

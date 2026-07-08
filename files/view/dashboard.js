@@ -5,20 +5,16 @@
 
 return view.extend({
     statusData: null,
-    logData: '',
     pollInterval: null,
-    logPollInterval: null,
     rootNode: null,
 
     versionEl: null,
     runningEl: null,
     portEl: null,
     urlEl: null,
-    logPre: null,
     latestVersionEl: null,
     upgradeBtn: null,
     checkUpdateBtn: null,
-    refreshLogBtn: null,
 
     fetchStatus: function() {
         return request.get(L.url('admin/services/adguardhome/status')).then(function(res) {
@@ -44,27 +40,17 @@ return view.extend({
         });
     },
 
-    fetchLog: function() {
-        return request.get(L.url('admin/services/adguardhome/log')).then(function(res) {
-            return res.json();
-        });
-    },
-
     load: function() {
         var self = this;
         return Promise.all([
             self.fetchStatus().catch(function() {
                 return { installed: false, service_installed: false, running: false, version: _('未知'), port: 3000 };
-            }),
-            self.fetchLog().catch(function() {
-                return { log: _('获取日志失败') };
             })
         ]);
     },
 
     render: function(data) {
         var status = data[0];
-        this.logData = data[1] ? (data[1].log || '') : '';
         this.statusData = status;
 
         var isBinInstalled = !!status.installed;
@@ -113,20 +99,9 @@ return view.extend({
         }, _('一键升级'));
         this.upgradeBtn = upgradeBtn;
 
-        var refreshLogBtn = E('button', {
-            class: 'btn cbi-button cbi-button-action',
-            click: function() { self.refreshLog(); }
-        }, _('刷新日志'));
-        this.refreshLogBtn = refreshLogBtn;
-
-        var logPre = E('pre', {
-            style: 'max-height:400px; overflow-y:auto; background:#1e1e1e; color:#d4d4d4; padding:12px; border-radius:4px; font-size:12px; white-space:pre-wrap; word-wrap:break-word;'
-        }, this.logData || _('暂无日志'));
-        this.logPre = logPre;
-
         var node = E('div', { class: 'cbi-map' }, [
             E('h2', {}, _('AdGuard Home 控制中心')),
-            E('div', { class: 'cbi-map-descr' }, _('实时状态监控 · 服务控制 · 日志查看 · 一键升级')),
+            E('div', { class: 'cbi-map-descr' }, _('实时状态监控 · 服务控制 · 一键升级')),
 
             E('div', { class: 'cbi-section' }, [
                 E('h3', {}, _('实时仪表盘')),
@@ -134,7 +109,7 @@ return view.extend({
                     E('tr', { class: 'tr' }, [
                         E('td', { class: 'td', style: 'width:32%;font-weight:bold' }, _('核心部署')),
                         E('td', { class: 'td' }, isBinInstalled
-                            ? E('span', { style: 'color:#2dca73;font-weight:bold' }, _('✔ 已下载 (/opt/AdGuardHome/AdGuardHome)'))
+                            ? E('span', { style: 'color:#2dca73;font-weight:bold' }, _('✔ 已下载') + ' (' + (status.bin_path || '/opt/AdGuardHome/AdGuardHome') + ')')
                             : E('span', { style: 'color:#e74c3c;font-weight:bold' }, _('✖ 未发现程序 (请运行官网命令安装)'))
                         )
                     ]),
@@ -190,14 +165,6 @@ return view.extend({
                     ]),
                     checkUpdateBtn,
                     upgradeBtn
-                ])
-            ]),
-
-            E('div', { class: 'cbi-section' }, [
-                E('h3', {}, _('日志查看器')),
-                E('div', { style: 'padding:15px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px' }, [
-                    E('div', { style: 'margin-bottom:10px;' }, [refreshLogBtn]),
-                    logPre
                 ])
             ])
         ]);
@@ -259,45 +226,6 @@ return view.extend({
         }, 5000);
     },
 
-    startLogPolling: function() {
-        var self = this;
-        var startTime = Date.now();
-        if (this.logPollInterval) {
-            clearInterval(this.logPollInterval);
-        }
-        this.logPollInterval = setInterval(function() {
-            if (!self.rootNode || !document.body.contains(self.rootNode)) {
-                clearInterval(self.logPollInterval);
-                self.logPollInterval = null;
-                return;
-            }
-            if (Date.now() - startTime > 300000) {
-                clearInterval(self.logPollInterval);
-                self.logPollInterval = null;
-                return;
-            }
-            self.fetchLog().then(function(data) {
-                if (data && data.log !== undefined) {
-                    self.logData = data.log;
-                    if (self.logPre) {
-                        self.logPre.textContent = data.log || _('暂无日志');
-                        self.logPre.scrollTop = self.logPre.scrollHeight;
-                    }
-                    var lowerLog = (data.log || '').toLowerCase();
-                    if (lowerLog.indexOf('done') !== -1 || lowerLog.indexOf('installed') !== -1 ||
-                        lowerLog.indexOf('upgrade complete') !== -1) {
-                        clearInterval(self.logPollInterval);
-                        self.logPollInterval = null;
-                        ui.addNotification(null, _('升级完成，正在刷新状态'), 'info');
-                        self.fetchStatus().then(function(s) {
-                            self.updateStatusUI(s);
-                        });
-                    }
-                }
-            }).catch(function() {});
-        }, 2000);
-    },
-
     execAction: function(action) {
         var self = this;
         ui.showModal(null, [E('p', { class: 'spinning' }, _('执行中...'))]);
@@ -356,34 +284,13 @@ return view.extend({
                 E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
                     ui.hideModal();
                     self.sendUpgrade().then(function() {
-                        ui.addNotification(null, _('升级任务已启动，请在下方日志查看器中查看进度'), 'info');
-                        self.startLogPolling();
+                        ui.addNotification(null, _('升级任务已启动，状态将自动刷新'), 'info');
                     }).catch(function() {
                         ui.addNotification(null, _('升级任务启动失败'), 'error');
                     });
                 }}, _('确认升级'))
             ])
         ]);
-    },
-
-    refreshLog: function() {
-        var self = this;
-        if (this.refreshLogBtn) {
-            this.refreshLogBtn.disabled = true;
-        }
-        this.fetchLog().then(function(data) {
-            if (data && data.log !== undefined) {
-                self.logData = data.log;
-                if (self.logPre) {
-                    self.logPre.textContent = data.log || _('暂无日志');
-                    self.logPre.scrollTop = self.logPre.scrollHeight;
-                }
-            }
-        }).catch(function() {}).then(function() {
-            if (self.refreshLogBtn) {
-                self.refreshLogBtn.disabled = false;
-            }
-        });
     },
 
     handleSaveApply: null,
