@@ -93,9 +93,6 @@ msgstr "Will download and install the latest version of AdGuard Home core. Servi
 msgid "取消"
 msgstr "Cancel"
 
-msgid "确认升级"
-msgstr "Confirm Upgrade"
-
 msgid "升级任务已启动，请在下方日志查看器中查看进度"
 msgstr "Upgrade task started, please check the progress in the log viewer below"
 
@@ -135,8 +132,8 @@ msgstr "Current version: "
 msgid "最新版本："
 msgstr "Latest version: "
 
-msgid "✔ 已下载 (/opt/AdGuardHome/AdGuardHome)"
-msgstr "✔ Installed (/opt/AdGuardHome/AdGuardHome)"
+msgid "✔ 已下载"
+msgstr "✔ Downloaded"
 
 msgid "✖ 未发现程序 (请运行官网命令安装)"
 msgstr "✖ Not found (Please run official install command)"

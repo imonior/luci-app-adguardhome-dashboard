@@ -53,6 +53,7 @@ function index()
     entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, true)
     entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, true)
     entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
+    entry({"admin", "services", "adguardhome", "log"}, call("get_log"), nil, true)
 end
 
 function get_status()
@@ -172,4 +173,31 @@ function do_upgrade()
     os.execute("curl -fsSL 'https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh' | sh >> " .. UPGRADE_LOG .. " 2>&1 &")
     http.prepare_content("application/json")
     http.write_json({ success = true })
+end
+
+function get_log()
+    local content = ""
+
+    -- 优先返回升级日志
+    if fs.access(UPGRADE_LOG) then
+        local data = fs.readfile(UPGRADE_LOG)
+        if data and #data > 100 then
+            content = data
+        end
+    end
+
+    -- 无升级日志则返回系统日志
+    if content == "" then
+        content = util.exec("logread -e AdGuardHome 2>/dev/null | tail -n 30")
+        if not content or content == "" then
+            content = util.exec("logger -s -t AdGuardHome 2>/dev/null; logread | grep -i adguard | tail -n 30 2>/dev/null")
+        end
+    end
+
+    if not content or content == "" then
+        content = "No logs available"
+    end
+
+    http.prepare_content("application/json")
+    http.write_json({ content = content })
 end

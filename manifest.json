@@ -1,8 +1,8 @@
 {
   "id": "luci-app-adguardhome-dashboard",
   "name": "AdGuard Home Dashboard",
-  "version": "2.0.0",
-  "description": "Minimalist LuCI dashboard for AdGuard Home, featuring UBus state tracking and real-time port detection.",
+  "version": "2.1.0",
+  "description": "LuCI 2.0 dashboard for AdGuard Home with Lua Controller RPC, real-time status polling, log viewer, and one-click upgrade.",
   "author": "imonior",
   "license": "MIT",
   "architecture": "all",

@@ -6,6 +6,7 @@
 return view.extend({
     statusData: null,
     pollInterval: null,
+    logPollInterval: null,
     rootNode: null,
 
     versionEl: null,
@@ -15,6 +16,7 @@ return view.extend({
     latestVersionEl: null,
     upgradeBtn: null,
     checkUpdateBtn: null,
+    logEl: null,
 
     fetchStatus: function() {
         return request.get(L.url('admin/services/adguardhome/status')).then(function(res) {
@@ -40,17 +42,27 @@ return view.extend({
         });
     },
 
+    fetchLog: function() {
+        return request.get(L.url('admin/services/adguardhome/log')).then(function(res) {
+            return res.json();
+        });
+    },
+
     load: function() {
         var self = this;
         return Promise.all([
             self.fetchStatus().catch(function() {
                 return { installed: false, service_installed: false, running: false, version: _('未知'), port: 3000 };
+            }),
+            self.fetchLog().catch(function() {
+                return { content: _('暂无日志') };
             })
         ]);
     },
 
     render: function(data) {
         var status = data[0];
+        var logData = data[1];
         this.statusData = status;
 
         var isBinInstalled = !!status.installed;
@@ -99,9 +111,20 @@ return view.extend({
         }, _('一键升级'));
         this.upgradeBtn = upgradeBtn;
 
+        var logPre = E('pre', {
+            style: 'max-height:300px;overflow-y:auto;padding:10px;background:#1e1e1e;color:#d4d4d4;font-size:12px;line-height:1.4;border-radius:4px;white-space:pre-wrap;word-break:break-all'
+        }, (logData && logData.content) || _('暂无日志'));
+        this.logEl = logPre;
+
+        var refreshLogBtn = E('button', {
+            class: 'btn cbi-button cbi-button-action',
+            style: 'margin-bottom:10px',
+            click: function() { self.refreshLog(); }
+        }, _('刷新日志'));
+
         var node = E('div', { class: 'cbi-map' }, [
             E('h2', {}, _('AdGuard Home 控制中心')),
-            E('div', { class: 'cbi-map-descr' }, _('实时状态监控 · 服务控制 · 一键升级')),
+            E('div', { class: 'cbi-map-descr' }, _('实时状态监控 · 服务控制 · 日志查看 · 一键升级')),
 
             E('div', { class: 'cbi-section' }, [
                 E('h3', {}, _('实时仪表盘')),
@@ -150,7 +173,7 @@ return view.extend({
                     E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-right:10px', click: function() { self.execAction('start'); } }, _('启动服务')),
                     E('button', { class: 'btn cbi-button cbi-button-action', style: 'margin-right:10px', click: function() { self.execAction('restart'); } }, _('重启服务')),
                     E('button', { class: 'btn cbi-button cbi-button-reset', style: 'margin-right:10px', click: function() { self.execAction('stop'); } }, _('停止服务')),
-                    !isServiceInstalled ? E('button', { class: 'btn cbi-button cbi-button-apply', style: 'background-color:#9b59b6;color:#ffffff!important; text-shadow:0 -1px 0 rgba(0,0,0,0.3); font-weight:bold' }, _('注册系统服务')) : null
+                    !isServiceInstalled ? E('button', { class: 'btn cbi-button cbi-button-apply', style: 'background-color:#9b59b6;color:#ffffff!important; text-shadow:0 -1px 0 rgba(0,0,0,0.3); font-weight:bold', click: function() { self.execAction('install_service'); } }, _('注册系统服务')) : null
                 ])
             ]),
 
@@ -165,6 +188,14 @@ return view.extend({
                     ]),
                     checkUpdateBtn,
                     upgradeBtn
+                ])
+            ]),
+
+            E('div', { class: 'cbi-section' }, [
+                E('h3', {}, _('日志查看器')),
+                E('div', { style: 'padding:15px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px' }, [
+                    refreshLogBtn,
+                    logPre
                 ])
             ])
         ]);
@@ -218,12 +249,57 @@ return view.extend({
             if (!self.rootNode || !document.body.contains(self.rootNode)) {
                 clearInterval(self.pollInterval);
                 self.pollInterval = null;
+                if (self.logPollInterval) {
+                    clearInterval(self.logPollInterval);
+                    self.logPollInterval = null;
+                }
                 return;
             }
             self.fetchStatus().then(function(data) {
                 self.updateStatusUI(data);
             }).catch(function() {});
         }, 5000);
+    },
+
+    refreshLog: function() {
+        var self = this;
+        this.fetchLog().then(function(data) {
+            if (self.logEl) {
+                self.logEl.textContent = (data && data.content) || _('暂无日志');
+                self.logEl.scrollTop = self.logEl.scrollHeight;
+            }
+        }).catch(function() {
+            if (self.logEl) {
+                self.logEl.textContent = _('获取日志失败');
+            }
+        });
+    },
+
+    startLogPolling: function() {
+        var self = this;
+        if (this.logPollInterval) {
+            clearInterval(this.logPollInterval);
+        }
+        var pollCount = 0;
+        this.logPollInterval = setInterval(function() {
+            pollCount++;
+            self.fetchLog().then(function(data) {
+                if (self.logEl && data && data.content) {
+                    self.logEl.textContent = data.content;
+                    self.logEl.scrollTop = self.logEl.scrollHeight;
+                }
+                if (data && data.content && (data.content.indexOf('done') !== -1 || data.content.indexOf('installed') !== -1)) {
+                    clearInterval(self.logPollInterval);
+                    self.logPollInterval = null;
+                    ui.addNotification(null, _('升级完成，正在刷新状态'), 'info');
+                    self.fetchStatus().then(function(s) { self.updateStatusUI(s); }).catch(function() {});
+                }
+            }).catch(function() {});
+            if (pollCount >= 150) {
+                clearInterval(self.logPollInterval);
+                self.logPollInterval = null;
+            }
+        }, 2000);
     },
 
     execAction: function(action) {
@@ -284,7 +360,8 @@ return view.extend({
                 E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
                     ui.hideModal();
                     self.sendUpgrade().then(function() {
-                        ui.addNotification(null, _('升级任务已启动，状态将自动刷新'), 'info');
+                        ui.addNotification(null, _('升级任务已启动，请在下方日志查看器中查看进度'), 'info');
+                        self.startLogPolling();
                     }).catch(function() {
                         ui.addNotification(null, _('升级任务启动失败'), 'error');
                     });

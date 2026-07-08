@@ -1,5 +1,14 @@
 # AdGuard Home Dashboard 修复与完备体升级计划
 
+> **交付状态 (v2.1, 2026-07-08)**：所有规划功能已实现。
+> - 菜单注册改用 `files/luci/menu.d/luci-app-adguardhome-dashboard.json`（LuCI 2.0 标准，非旧 `files/luci/menu.json`）
+> - `dashboard.htm` 模板已删除（不再需要，LuCI 2.0 由 menu.json + JS View 管理生命周期）
+> - `install.sh` 改为文件复制模式（非 curl-pipe heredoc），从项目目录直接部署
+> - Lua Controller 移至 `/usr/lib/lua/luci/controller/`（非 `/usr/share/luci/controller/`）
+> - 5 个 API 端点全部实现（含 `get_log()`）
+> - 日志查看器已实现（含升级时 2s 快速轮询）
+> - 翻译文件已同步，.lmo 使用标准 LMO 格式编译
+
 ## Context
 
 Dashboard 的核心版本、运行状态无法正确显示，控制按钮不起作用。根因有三：
@@ -114,9 +123,9 @@ chmod 644 /usr/share/luci/controller/adguardhome.lua
 rm -f /usr/share/luci/controller/adguardhome.lua
 ```
 
-### 5. 不变：`files/luci/menu.json`
+### 5. 新增 `files/luci/menu.d/luci-app-adguardhome-dashboard.json`
 
-继续负责菜单注册，`"action": {"type": "view", "path": "adguardhome/dashboard"}` 不变。
+LuCI 2.0 标准菜单注册，`"action": {"type": "view", "path": "adguardhome/dashboard"}`。取代旧的 Lua `entry()` 菜单注册和 `dashboard.htm` 模板渲染方式。
 
 ### 6. 不变：`files/luci/acl.json`
 
