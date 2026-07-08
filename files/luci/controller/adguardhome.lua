@@ -25,12 +25,13 @@ local UPGRADE_LOG = "/tmp/agh_upgrade.log"
 
 local function find_binary()
     for _, p in ipairs(BIN_PATHS) do
-        if fs.access(p) then
+        if fs.access(p, 'r') then
             return p
         end
     end
-    local which_out = util.exec("which AdGuardHome 2>/dev/null"):trim()
-    if which_out ~= "" then
+    local which_out = util.exec("which AdGuardHome 2>/dev/null")
+    which_out = which_out and which_out:gsub("^%s+", ""):gsub("%s+$", "") or ""
+    if which_out ~= "" and fs.access(which_out, 'r') then
         return which_out
     end
     return nil
@@ -46,15 +47,11 @@ local function find_init_script()
 end
 
 function index()
-    local e
-    e = entry({"admin", "services", "adguardhome", "status"}, call("get_status"))
-    e.leaf = true
-    e = entry({"admin", "services", "adguardhome", "action"}, call("do_action"))
-    e.leaf = true
-    e = entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"))
-    e.leaf = true
-    e = entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"))
-    e.leaf = true
+    entry({"admin", "services", "adguardhome"}, template("adguardhome/dashboard"), _("AdGuard Home"), 60)
+    entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, true)
+    entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, true)
+    entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, true)
+    entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
 end
 
 function get_status()

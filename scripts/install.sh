@@ -69,7 +69,6 @@ fetch() {
     mkdir -p "$TMP"
     log "📦 开始从 GitHub 仓库拉取最新的轻量级仪表盘资产..."
     
-    download "$BASE/files/luci/menu.json" "$TMP/menu.json"
     download "$BASE/files/luci/acl.json" "$TMP/acl.json"
     download "$BASE/files/luci/controller/adguardhome.lua" "$TMP/adguardhome.lua"
     download "$BASE/files/luci/i18n/adguardhome.po" "$TMP/adguardhome.po"
@@ -95,7 +94,6 @@ apply() {
 
     log "分发各组件至系统对应的路由、权限和视图沙箱..."
     mkdir -p /usr/share/luci/controller /usr/share/luci/i18n /usr/lib/lua/luci/i18n
-    cp "$TMP/menu.json" "$MENU_DIR/luci-app-adguardhome-dashboard.json"
     cp "$TMP/acl.json" "$ACL_DIR/luci-app-adguardhome-dashboard.json"
     cp "$TMP/adguardhome.lua" /usr/share/luci/controller/adguardhome.lua
     cp "$TMP/adguardhome.po" /usr/share/luci/i18n/adguardhome.po
@@ -110,8 +108,7 @@ apply() {
     echo "v2.0-Full" > /etc/adguardhome-dashboard.version
 
     log "规范化文件系统权限 (遵循 Linux 只读静态分发规范)..."
-    chmod 644 "$MENU_DIR/luci-app-adguardhome-dashboard.json" \
-              "$ACL_DIR/luci-app-adguardhome-dashboard.json" \
+    chmod 644 "$ACL_DIR/luci-app-adguardhome-dashboard.json" \
               /usr/share/luci/controller/adguardhome.lua \
               /usr/share/luci/i18n/adguardhome.po \
               /usr/share/luci/i18n/adguardhome.zh-cn.po \
