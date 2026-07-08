@@ -236,7 +236,11 @@ local function compile(t, out_path)
     table.sort(index, function(a, b) return a[1] < b[1] end)
 
     local function pack32(n)
-        return string.char((n>>24)&0xff, (n>>16)&0xff, (n>>8)&0xff, n&0xff)
+        local b1 = math.floor(n / 16777216) % 256
+        local b2 = math.floor(n / 65536) % 256
+        local b3 = math.floor(n / 256) % 256
+        local b4 = n % 256
+        return string.char(b1, b2, b3, b4)
     end
 
     local lmo = 'LMO\0' .. pack32(#index)
