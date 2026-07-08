@@ -1,8 +1,12 @@
 {
-	"luci-app-adguardhome-dashboard": {
-		"description": "Grant access to AdGuard Home Dashboard Menu and UI",
-		"read": {
-			"cgi-io": [ "list" ]
-		}
-	}
+    "luci-app-adguardhome-dashboard": {
+        "description": "AdGuardHome Dashboard ACL",
+        "read": {
+            "ubus": { "*": [ "*" ] }
+        },
+        "write": {
+            "ubus": { "*": [ "*" ] },
+            "uci": [ "*" ]
+        }
+    }
 }

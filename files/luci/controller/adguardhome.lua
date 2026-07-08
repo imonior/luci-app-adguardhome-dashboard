@@ -47,15 +47,12 @@ local function find_init_script()
 end
 
 function index()
-    entry({"admin", "services", "adguardhome"}, call("index_action"), _("AdGuard Home"), 60).dependent = false
+    -- 菜单入口由 menu.d/luci-app-adguardhome-dashboard.json 注册（LuCI 2.0 标准）
+    -- 此处仅注册 API 子路由
     entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, true)
     entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, true)
     entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, true)
     entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
-end
-
-function index_action()
-    luci.template.render("adguardhome/dashboard")
 end
 
 function get_status()
