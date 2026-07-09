@@ -32,6 +32,7 @@ rm -f /usr/share/luci/i18n/adguardhome.zh-cn.po
 # 2. 清理配置标记与日志
 rm -f /etc/adguardhome-dashboard.log
 rm -f /etc/adguardhome-dashboard.version
+rm -f /etc/adguardhome-dashboard.proxy
 
 # 3. 强力清除 LuCI 索引缓存 (关键步骤)
 # 卸载不彻底的核心原因往往是索引缓存没删，导致后台还在试图寻找旧视图文件

@@ -114,8 +114,12 @@ if [ -n "$PROXY_PREFIX" ]; then
     RAW_BASE="${PROXY_PREFIX}https://raw.githubusercontent.com/${REPO}/${BRANCH}"
     AGH_INSTALL_URL="${PROXY_PREFIX}${AGH_INSTALL_URL}"
     GH_API_BASE="${PROXY_PREFIX}https://api.github.com"
+    # 保存代理配置供 Dashboard 后续使用（check_update/upgrade）
+    echo "proxy=${PROXY_PREFIX}" > /etc/adguardhome-dashboard.proxy 2>/dev/null || true
 else
     GH_API_BASE="https://api.github.com"
+    # 清除旧代理配置
+    rm -f /etc/adguardhome-dashboard.proxy 2>/dev/null || true
 fi
 
 # ═══════════════════════════════════════════════════════════

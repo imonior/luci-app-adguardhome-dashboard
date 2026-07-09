@@ -6,6 +6,7 @@
             "type": "view",
             "path": "adguardhome/dashboard"
         },
-        "acls": [ "luci-app-adguardhome-dashboard" ]
+        "acls": [ "luci-app-adguardhome-dashboard" ],
+        "i18n": "adguardhome"
     }
 }

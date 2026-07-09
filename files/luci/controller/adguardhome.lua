@@ -3,6 +3,7 @@ module("luci.controller.adguardhome", package.seeall)
 local util = require "luci.util"
 local fs = require "nixio.fs"
 local http = require "luci.http"
+local i18n = require "luci.i18n"
 
 local BIN_PATHS = {
     "/opt/AdGuardHome/AdGuardHome",
@@ -22,6 +23,71 @@ local CONFIG_PATHS = {
 }
 
 local UPGRADE_LOG = "/tmp/agh_upgrade.log"
+local PROXY_CONF = "/etc/adguardhome-dashboard.proxy"
+
+-- 代理列表: 安装时写入的配置优先，否则使用内置列表
+local PROXY_LIST = {}
+
+local function load_proxies()
+    -- 读取安装时保存的代理配置
+    if fs.access(PROXY_CONF) then
+        local content = fs.readfile(PROXY_CONF)
+        if content then
+            local saved = content:match("proxy%s*=%s*(%S+)")
+            if saved and saved ~= "" then
+                PROXY_LIST[1] = saved
+            end
+        end
+    end
+    -- 内置代理兜底
+    local builtins = {
+        "https://ghfast.top/",
+        "https://gh-proxy.com/",
+        "https://kkgithub.com/"
+    }
+    for _, p in ipairs(builtins) do
+        local found = false
+        for _, existing in ipairs(PROXY_LIST) do
+            if existing == p then found = true; break end
+        end
+        if not found then
+            PROXY_LIST[#PROXY_LIST + 1] = p
+        end
+    end
+end
+
+local function gh_url(raw_url)
+    if PROXY_LIST[1] and PROXY_LIST[1] ~= "" then
+        return PROXY_LIST[1] .. raw_url
+    end
+    return raw_url
+end
+
+local function try_with_proxies(url)
+    -- 如果已配置代理，优先走代理（避免直连超时浪费 10 秒）
+    if PROXY_LIST[1] and PROXY_LIST[1] ~= "" then
+        for _, proxy in ipairs(PROXY_LIST) do
+            local proxied = util.exec("curl -m 10 -fsSL '" .. proxy .. url .. "' 2>/dev/null")
+            if proxied and #proxied > 10 then
+                return proxied
+            end
+        end
+    else
+        -- 无配置代理时先尝试直连
+        local direct = util.exec("curl -m 10 -fsSL '" .. url .. "' 2>/dev/null")
+        if direct and #direct > 10 then
+            return direct
+        end
+        -- 直连失败则逐个尝试内置代理
+        for _, proxy in ipairs(PROXY_LIST) do
+            local proxied = util.exec("curl -m 10 -fsSL '" .. proxy .. url .. "' 2>/dev/null")
+            if proxied and #proxied > 10 then
+                return proxied
+            end
+        end
+    end
+    return ""
+end
 
 local function find_binary()
     for _, p in ipairs(BIN_PATHS) do
@@ -47,6 +113,9 @@ local function find_init_script()
 end
 
 function index()
+    -- 加载 i18n 翻译目录（确保 JS view 的 _() 函数能获取翻译）
+    i18n.loadc("adguardhome")
+
     -- 菜单入口由 menu.d/luci-app-adguardhome-dashboard.json 注册（LuCI 2.0 标准）
     -- 此处仅注册 API 子路由
     entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, true)
@@ -107,7 +176,12 @@ function get_status()
         if fs.access(p) then
             local content = fs.readfile(p)
             if content then
-                local port = content:match("port:%s*(%d+)")
+                -- AdGuardHome.yaml: web admin 端口在 clients 段为 web_port，
+                -- 通用 port: 可能是 DNS (53) 等其他端口，优先匹配 web_port
+                local port = content:match("web_port:%s*(%d+)")
+                if not port then
+                    port = content:match("port:%s*(%d+)")
+                end
                 if port then
                     status.port = tonumber(port)
                     break
@@ -159,9 +233,10 @@ function do_action()
 end
 
 function check_update()
-    local output = util.exec("curl -m 8 -fsSL 'https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest' 2>&1")
+    load_proxies()
+    local output = try_with_proxies("https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest")
     local latest = ""
-    if output then
+    if output and #output > 0 then
         latest = output:match('"tag_name"%s*:%s*"(.-)"') or ""
     end
     http.prepare_content("application/json")
@@ -169,8 +244,10 @@ function check_update()
 end
 
 function do_upgrade()
+    load_proxies()
+    local install_url = gh_url("https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh")
     os.execute("echo '=== AdGuardHome 升级任务开始 ===' > " .. UPGRADE_LOG)
-    os.execute("curl -fsSL 'https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh' | sh >> " .. UPGRADE_LOG .. " 2>&1 &")
+    os.execute("curl -fsSL '" .. install_url .. "' | sh >> " .. UPGRADE_LOG .. " 2>&1 &")
     http.prepare_content("application/json")
     http.write_json({ success = true })
 end
