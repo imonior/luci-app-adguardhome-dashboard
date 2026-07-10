@@ -203,6 +203,10 @@ return view.extend({
         this.rootNode = node;
         this.startPolling();
 
+        // 页面加载后自动检查最新版本
+        var self = this;
+        setTimeout(function() { self.checkUpdate(); }, 1000);
+
         return node;
     },
 

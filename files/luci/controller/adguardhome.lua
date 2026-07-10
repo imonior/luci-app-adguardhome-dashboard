@@ -173,11 +173,16 @@ function get_status()
         if fs.access(p) then
             local content = fs.readfile(p)
             if content then
-                -- AdGuardHome.yaml: web admin 端口在 clients 段为 web_port，
-                -- 通用 port: 可能是 DNS (53) 等其他端口，优先匹配 web_port
-                local port = content:match("web_port:%s*(%d+)")
+                -- AdGuardHome.yaml web 端口有两种格式:
+                -- 旧版 (<v0.107.33): 顶层 bind_port: 3000
+                -- 新版 (>=v0.107.36): http: 段下 address: 0.0.0.0:3000
+                -- 注意: 通用 port: 是 dns 段的 DNS 端口 (53)，不能用来取 web 端口
+                local port = content:match("bind_port:%s*(%d+)")
                 if not port then
-                    port = content:match("port:%s*(%d+)")
+                    port = content:match("http:.-address:%s*[%d%.]+:(%d+)")
+                end
+                if not port then
+                    port = content:match("http:.-address:%s*:(%d+)")
                 end
                 if port then
                     status.port = tonumber(port)

@@ -135,9 +135,17 @@ if [ -f "$AGH_BIN" ]; then
     CURRENT_VER=$("$AGH_BIN" --version 2>&1 | awk '{print $NF}')
     case "$CURRENT_VER" in v*) ;; *) CURRENT_VER="v$CURRENT_VER" ;; esac
 
-    # 获取 GitHub 最新版本
+    # 获取 GitHub 最新版本（支持代理 fallback）
     LATEST_VER=$(curl -fsSL -m 8 "${GH_API_BASE}/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null \
         | awk -F'"' '/tag_name/{print $4; exit}')
+    # 主 API 失败则逐个尝试代理
+    if [ -z "$LATEST_VER" ]; then
+        for _p in $PROXY_LIST; do
+            LATEST_VER=$(curl -fsSL -m 8 "${_p}https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null \
+                | awk -F'"' '/tag_name/{print $4; exit}')
+            [ -n "$LATEST_VER" ] && break
+        done
+    fi
 
     if [ -n "$CURRENT_VER" ] && [ -n "$LATEST_VER" ]; then
         log "当前版本: $CURRENT_VER    最新版本: $LATEST_VER"
@@ -211,9 +219,11 @@ mkdir -p "$DOWNLOAD_DIR/luci/controller" "$DOWNLOAD_DIR/luci/menu.d" "$DOWNLOAD_
 # 从 GitHub 下载所有 Dashboard 文件
 download_from_github() {
     log "从 GitHub 下载 Dashboard 文件..."
+    _cb=$(date +%s 2>/dev/null || echo 0)
     dl() {
         local url="$1" dest="$2"
-        if curl -fsSL -m 30 --connect-timeout 10 --retry 2 -o "$dest" "$url"; then
+        # 添加时间戳参数破除 CDN/代理缓存
+        if curl -fsSL -m 30 --connect-timeout 10 --retry 2 -o "$dest" "${url}?_cb=${_cb}"; then
             log "  ✓ $(basename "$dest")"
         else
             log "  ✗ 下载失败: $(basename "$dest")"
@@ -296,9 +306,25 @@ chmod 644 /usr/lib/lua/luci/controller/adguardhome.lua \
 
 # ── 清除缓存 & 重启服务 ────────────────────────────
 log "清除 LuCI 缓存并重启服务..."
-rm -rf /tmp/luci-indexcache /tmp/luci-modulecache /tmp/luci-htmlcache /tmp/luci-cbi-*
+# 清除所有 LuCI 相关缓存（包括 ucode bridge 缓存）
+rm -rf /tmp/luci-* 2>/dev/null || true
+rm -rf /tmp/luci-indexcache.* /tmp/luci-modulecache.* 2>/dev/null || true
+# 清除 Lua 字节码缓存
+find /tmp -name '*.luac' -delete 2>/dev/null || true
 /etc/init.d/rpcd restart 2>/dev/null || true
 /etc/init.d/uhttpd restart 2>/dev/null || true
+
+# ── 部署验证 ────────────────────────────────────────
+log "验证部署文件..."
+if grep -q 'loadc' /usr/lib/lua/luci/controller/adguardhome.lua 2>/dev/null; then
+    log "⚠ 警告: controller.lua 仍包含旧代码 (i18n.loadc)"
+    log "  可能是 GitHub CDN 缓存未刷新，请尝试以下方法:"
+    log "  1) 等待几分钟后重新运行安装"
+    log "  2) 使用代理: GITHUB_PROXY=https://ghfast.top/ sh install.sh"
+    log "  3) 手动验证: curl -fsSL '${RAW_BASE}/files/luci/controller/adguardhome.lua' | grep loadc"
+else
+    log "  ✓ controller.lua 验证通过"
+fi
 
 # ── 清理临时目录 ────────────────────────────────────
 rm -rf "$TMPDIR"
