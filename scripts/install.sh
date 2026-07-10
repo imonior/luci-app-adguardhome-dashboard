@@ -135,10 +135,15 @@ if [ -f "$AGH_BIN" ]; then
     CURRENT_VER=$("$AGH_BIN" --version 2>&1 | awk '{print $NF}')
     case "$CURRENT_VER" in v*) ;; *) CURRENT_VER="v$CURRENT_VER" ;; esac
 
-    # 获取 GitHub 最新版本（支持代理 fallback）
-    LATEST_VER=$(curl -fsSL -m 8 "${GH_API_BASE}/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null \
+    # 获取 GitHub 最新版本（直连 + 代理双路径）
+    LATEST_VER=$(curl -fsSL -m 5 "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null \
         | awk -F'"' '/tag_name/{print $4; exit}')
-    # 主 API 失败则逐个尝试代理
+    # 直连失败则尝试已配置的 GH_API_BASE（可能是代理）
+    if [ -z "$LATEST_VER" ] && [ "$GH_API_BASE" != "https://api.github.com" ]; then
+        LATEST_VER=$(curl -fsSL -m 8 "${GH_API_BASE}/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null \
+            | awk -F'"' '/tag_name/{print $4; exit}')
+    fi
+    # 仍失败则逐个尝试内置代理
     if [ -z "$LATEST_VER" ]; then
         for _p in $PROXY_LIST; do
             LATEST_VER=$(curl -fsSL -m 8 "${_p}https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null \

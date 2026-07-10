@@ -63,26 +63,16 @@ local function gh_url(raw_url)
 end
 
 local function try_with_proxies(url)
-    -- 如果已配置代理，优先走代理（避免直连超时浪费 10 秒）
-    if PROXY_LIST[1] and PROXY_LIST[1] ~= "" then
-        for _, proxy in ipairs(PROXY_LIST) do
-            local proxied = util.exec("curl -m 10 -fsSL '" .. proxy .. url .. "' 2>/dev/null")
-            if proxied and #proxied > 10 then
-                return proxied
-            end
-        end
-    else
-        -- 无配置代理时先尝试直连
-        local direct = util.exec("curl -m 10 -fsSL '" .. url .. "' 2>/dev/null")
-        if direct and #direct > 10 then
-            return direct
-        end
-        -- 直连失败则逐个尝试内置代理
-        for _, proxy in ipairs(PROXY_LIST) do
-            local proxied = util.exec("curl -m 10 -fsSL '" .. proxy .. url .. "' 2>/dev/null")
-            if proxied and #proxied > 10 then
-                return proxied
-            end
+    -- 始终先尝试直连（5 秒超时，快速失败）
+    local direct = util.exec("curl -m 5 -fsSL '" .. url .. "' 2>/dev/null")
+    if direct and #direct > 10 then
+        return direct
+    end
+    -- 直连失败，逐个尝试代理（已配置的 + 内置的）
+    for _, proxy in ipairs(PROXY_LIST) do
+        local proxied = util.exec("curl -m 10 -fsSL '" .. proxy .. url .. "' 2>/dev/null")
+        if proxied and #proxied > 10 then
+            return proxied
         end
     end
     return ""
@@ -265,12 +255,46 @@ function get_log()
         end
     end
 
-    -- 无升级日志则返回系统日志
+    -- 尝试 AdGuardHome 自身日志文件
     if content == "" then
-        content = util.exec("logread -e AdGuardHome 2>/dev/null | tail -n 30")
-        if not content or content == "" then
-            content = util.exec("logger -s -t AdGuardHome 2>/dev/null; logread | grep -i adguard | tail -n 30 2>/dev/null")
+        local agh_logs = {
+            "/opt/AdGuardHome/data/agh.log",
+            "/var/log/AdGuardHome.log",
+            "/tmp/AdGuardHome.log"
+        }
+        for _, lf in ipairs(agh_logs) do
+            if fs.access(lf) then
+                local data = fs.readfile(lf)
+                if data and #data > 50 then
+                    content = data
+                    break
+                end
+            end
         end
+    end
+
+    -- 系统日志: 取 AdGuardHome 相关日志（不限 error 级别）
+    if content == "" then
+        content = util.exec("logread -e 'AdGuardHome' 2>/dev/null | tail -n 50")
+    end
+    if not content or content == "" then
+        content = util.exec("logread 2>/dev/null | grep -i 'adguard' | tail -n 50")
+    end
+
+    -- 附加服务状态摘要
+    local bin_path = find_binary()
+    local summary = ""
+    if bin_path then
+        local ver = util.exec(bin_path .. " --version 2>&1") or ""
+        ver = ver:gsub("^%s+", ""):gsub("%s+$", "")
+        summary = "=== AdGuardHome 状态 ===\n" .. ver .. "\n"
+        local pid_out = util.exec("pgrep -f 'AdGuardHome' 2>/dev/null")
+        if pid_out and pid_out:match("%d") then
+            summary = summary .. "PID: " .. (pid_out:match("(%d+)") or "N/A") .. " (running)\n"
+        else
+            summary = summary .. "Status: stopped\n"
+        end
+        summary = summary .. "========================\n\n"
     end
 
     if not content or content == "" then
@@ -278,5 +302,5 @@ function get_log()
     end
 
     http.prepare_content("application/json")
-    http.write_json({ content = content })
+    http.write_json({ content = summary .. content })
 end
