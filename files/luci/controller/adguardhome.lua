@@ -186,8 +186,27 @@ function get_status()
     http.write_json(status)
 end
 
+-- 兼容 JSON 和 form-encoded 两种 POST 格式
+local function post_value(key)
+    -- 先尝试 form-encoded（标准 LuCI 方式）
+    local val = http.formvalue(key)
+    if val and val ~= "" then return val end
+    -- 再尝试 JSON body（request.post 可能发送 JSON）
+    local content_type = http.getenv("CONTENT_TYPE") or ""
+    if content_type:match("json") then
+        local body = http.content()
+        if body then
+            local v = body:match('"' .. key .. '"%s*:%s*"(.-)"')
+            if v then return v end
+            v = body:match('"' .. key .. '"%s*:%s*(%d+)')
+            if v then return v end
+        end
+    end
+    return nil
+end
+
 function do_action()
-    local action = http.formvalue("action")
+    local action = post_value("action")
 
     if action ~= "start" and action ~= "stop" and action ~= "restart" and action ~= "install_service" then
         http.prepare_content("application/json")
@@ -237,9 +256,27 @@ end
 
 function do_upgrade()
     load_proxies()
+    local force = post_value("force")
     local install_url = gh_url("https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh")
+
     os.execute("echo '=== AdGuardHome 升级任务开始 ===' > " .. UPGRADE_LOG)
-    os.execute("curl -fsSL '" .. install_url .. "' | sh >> " .. UPGRADE_LOG .. " 2>&1 &")
+
+    if force == "1" then
+        -- 强制重装: 先停止服务确保干净安装
+        local init_script = find_init_script()
+        if init_script then
+            os.execute(init_script .. " stop >> " .. UPGRADE_LOG .. " 2>&1")
+        else
+            local bin_path = find_binary()
+            if bin_path then
+                os.execute(bin_path .. " -s stop >> " .. UPGRADE_LOG .. " 2>&1")
+            end
+        end
+        os.execute("sleep 2 && curl -fsSL '" .. install_url .. "' | sh >> " .. UPGRADE_LOG .. " 2>&1 &")
+    else
+        os.execute("curl -fsSL '" .. install_url .. "' | sh >> " .. UPGRADE_LOG .. " 2>&1 &")
+    end
+
     http.prepare_content("application/json")
     http.write_json({ success = true })
 end
