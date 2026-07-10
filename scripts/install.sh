@@ -45,20 +45,20 @@ if [ -n "$GITHUB_PROXY" ]; then
     PROXY_PREFIX="$GITHUB_PROXY"
     log "使用环境变量指定代理: $PROXY_PREFIX"
 else
-    # 测试 GitHub 直连（5 秒超时）
+    # 测试 GitHub 直连（10 秒超时，DNS 解析可能较慢）
     log "检测 GitHub 连通性..."
     _t0=$(_now_ms)
-    if curl -fsSL -m 5 -o /dev/null 'https://raw.githubusercontent.com' 2>/dev/null; then
+    if curl -fsSL -m 10 -o /dev/null 'https://api.github.com' 2>/dev/null; then
         log "GitHub 直连正常 ($(_elapsed_ms $_t0)ms)"
     else
         log "GitHub 直连失败，正在测试代理节点..."
 
-        # 逐个测试代理连通性
+        # 逐个测试代理连通性（10 秒超时）
         _proxy_results=""
         for proxy in $PROXY_LIST; do
-            _test_url="${proxy}https://raw.githubusercontent.com"
+            _test_url="${proxy}https://api.github.com"
             _t1=$(_now_ms)
-            if curl -fsSL -m 5 -o /dev/null "$_test_url" 2>/dev/null; then
+            if curl -fsSL -m 10 -o /dev/null "$_test_url" 2>/dev/null; then
                 _proxy_results="$_proxy_results ok:$(_elapsed_ms $_t1)"
             else
                 _proxy_results="$_proxy_results fail:0"
@@ -86,6 +86,9 @@ else
             _idx=$((_idx + 1))
         done
 
+        echo ""
+        echo "  ⚠ 连通性测试仅供参考，DNS 劫持/透明代理可能导致测试不准"
+        echo "  ⚠ 即使测试超时，代理仍可正常工作，建议选择代理重试"
         echo ""
         printf "请选择 [1-%d，默认 2]: " $((_idx - 1))
         read -r PROXY_CHOICE
@@ -225,23 +228,42 @@ mkdir -p "$DOWNLOAD_DIR/luci/controller" "$DOWNLOAD_DIR/luci/menu.d" "$DOWNLOAD_
 download_from_github() {
     log "从 GitHub 下载 Dashboard 文件..."
     _cb=$(date +%s 2>/dev/null || echo 0)
+    _gh_raw="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+
     dl() {
-        local url="$1" dest="$2"
-        # 添加时间戳参数破除 CDN/代理缓存
-        if curl -fsSL -m 30 --connect-timeout 10 --retry 2 -o "$dest" "${url}?_cb=${_cb}"; then
-            log "  ✓ $(basename "$dest")"
-        else
-            log "  ✗ 下载失败: $(basename "$dest")"
-            rm -rf "$TMPDIR"
-            exit 1
+        local path="$1" dest="$2"
+        local fname=$(basename "$dest")
+        # 先尝试当前 RAW_BASE（直连或已选代理）
+        if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
+            -o "$dest" "${RAW_BASE}/${path}?_cb=${_cb}" 2>/dev/null; then
+            log "  ✓ $fname"
+            return 0
         fi
+        # 失败则逐个尝试代理 + 原始 GitHub URL（避免双重代理）
+        for _p in $PROXY_LIST; do
+            if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
+                -o "$dest" "${_p}${_gh_raw}/${path}?_cb=${_cb}" 2>/dev/null; then
+                log "  ✓ $fname (via $(echo "$_p" | sed 's|https\{0,1\}://||;s|/$||'))"
+                return 0
+            fi
+        done
+        # 最后尝试直连原始 URL
+        if curl -fsSL -m 30 --connect-timeout 10 --retry 2 \
+            -o "$dest" "${_gh_raw}/${path}?_cb=${_cb}" 2>/dev/null; then
+            log "  ✓ $fname (direct)"
+            return 0
+        fi
+        log "  ✗ 下载失败: $fname（直连和所有代理均失败）"
+        log "  提示: 可使用 GITHUB_PROXY=https://ghfast.top/ 环境变量强制指定代理"
+        rm -rf "$TMPDIR"
+        exit 1
     }
-    dl "${RAW_BASE}/files/luci/controller/adguardhome.lua"                "$DOWNLOAD_DIR/luci/controller/adguardhome.lua"
-    dl "${RAW_BASE}/files/luci/menu.d/luci-app-adguardhome-dashboard.json" "$DOWNLOAD_DIR/luci/menu.d/luci-app-adguardhome-dashboard.json"
-    dl "${RAW_BASE}/files/luci/acl.json"                                  "$DOWNLOAD_DIR/luci/acl.json"
-    dl "${RAW_BASE}/files/view/dashboard.js"                              "$DOWNLOAD_DIR/view/dashboard.js"
-    dl "${RAW_BASE}/files/luci/i18n/adguardhome.lmo"                      "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo"
-    dl "${RAW_BASE}/files/luci/i18n/adguardhome.zh-cn.lmo"                "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo"
+    dl "files/luci/controller/adguardhome.lua"                     "$DOWNLOAD_DIR/luci/controller/adguardhome.lua"
+    dl "files/luci/menu.d/luci-app-adguardhome-dashboard.json"     "$DOWNLOAD_DIR/luci/menu.d/luci-app-adguardhome-dashboard.json"
+    dl "files/luci/acl.json"                                       "$DOWNLOAD_DIR/luci/acl.json"
+    dl "files/view/dashboard.js"                                   "$DOWNLOAD_DIR/view/dashboard.js"
+    dl "files/luci/i18n/adguardhome.lmo"                           "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo"
+    dl "files/luci/i18n/adguardhome.zh-cn.lmo"                     "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo"
     log "所有文件下载完成"
 }
 

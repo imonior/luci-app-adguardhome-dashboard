@@ -79,6 +79,33 @@ function T(s) {
     return t !== undefined ? t : s;
 }
 
+function _isDark() {
+    try {
+        var html = document.documentElement;
+        var cls = (html.className || '') + ' ' + (document.body ? document.body.className || '' : '');
+        if (cls.match(/dark|material|argon/i)) return true;
+        var bg = getComputedStyle(document.body || html).backgroundColor || '';
+        var m = bg.match(/\d+/g);
+        if (m && m.length >= 3) {
+            var lum = (parseInt(m[0]) * 299 + parseInt(m[1]) * 587 + parseInt(m[2]) * 114) / 1000;
+            return lum < 128;
+        }
+    } catch(e) {}
+    return false;
+}
+
+function _themeStyles() {
+    var dark = _isDark();
+    return {
+        panelBg: dark ? 'rgba(255,255,255,0.05)' : '#f9f9f9',
+        panelBorder: dark ? 'rgba(255,255,255,0.12)' : '#ddd',
+        logBg: dark ? '#0d1117' : '#1e1e1e',
+        logColor: '#d4d4d4',
+        tableStripe: dark ? 'rgba(255,255,255,0.03)' : 'transparent',
+        linkColor: dark ? '#58a6ff' : '#007bff'
+    };
+}
+
 return view.extend({
     statusData: null,
     pollInterval: null,
@@ -155,6 +182,7 @@ return view.extend({
             : '#';
 
         var self = this;
+        var theme = _themeStyles();
 
         var versionCode = E('code', {}, versionStr);
         this.versionEl = versionCode;
@@ -168,7 +196,7 @@ return view.extend({
         this.portEl = portSpan;
 
         var urlContainer = E('span', {}, isRunning
-            ? [E('a', { href: targetUrl, target: '_blank', style: 'font-weight:bold;color:#007bff' }, targetUrl)]
+            ? [E('a', { href: targetUrl, target: '_blank', style: 'font-weight:bold;color:' + theme.linkColor }, targetUrl)]
             : T('服务未启动')
         );
         this.urlEl = urlContainer;
@@ -198,7 +226,7 @@ return view.extend({
         this.forceBtn = forceBtn;
 
         var logPre = E('pre', {
-            style: 'max-height:300px;overflow-y:auto;padding:10px;background:#1e1e1e;color:#d4d4d4;font-size:12px;line-height:1.4;border-radius:4px;white-space:pre-wrap;word-break:break-all'
+            style: 'max-height:300px;overflow-y:auto;padding:10px;background:' + theme.logBg + ';color:' + theme.logColor + ';font-size:12px;line-height:1.4;border-radius:4px;white-space:pre-wrap;word-break:break-all'
         }, (logData && logData.content) || T('暂无日志'));
         this.logEl = logPre;
 
@@ -250,7 +278,7 @@ return view.extend({
 
             E('div', { class: 'cbi-section' }, [
                 E('h3', {}, T('服务控制台')),
-                E('div', { style: 'padding:15px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px' }, [
+                E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [
                     E('div', { style: 'margin-bottom:12px;' }, [
                         E('strong', {}, T('当前控制模式：')),
                         E('span', { style: isServiceInstalled ? 'color:#2dca73;font-weight:bold' : 'color:#f39c12;font-weight:bold' },
@@ -265,7 +293,7 @@ return view.extend({
 
             E('div', { class: 'cbi-section' }, [
                 E('h3', {}, T('版本更新')),
-                E('div', { style: 'padding:15px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px' }, [
+                E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [
                     E('div', { style: 'margin-bottom:12px;' }, [
                         E('strong', {}, T('当前版本：')),
                         E('code', { style: 'margin-right:20px' }, versionStr),
@@ -280,7 +308,7 @@ return view.extend({
 
             E('div', { class: 'cbi-section' }, [
                 E('h3', {}, T('日志查看器')),
-                E('div', { style: 'padding:15px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px' }, [
+                E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [
                     refreshLogBtn,
                     logPre
                 ])
@@ -297,6 +325,7 @@ return view.extend({
 
     updateStatusUI: function(status) {
         this.statusData = status;
+        var theme = _themeStyles();
         var isRunning = !!status.running;
         var pid = status.pid || '—';
         var versionStr = status.version || T('未知');
@@ -322,7 +351,7 @@ return view.extend({
             this.urlEl.innerHTML = '';
             if (isRunning) {
                 var targetUrl = window.location.protocol + '//' + window.location.hostname + ':' + port;
-                this.urlEl.appendChild(E('a', { href: targetUrl, target: '_blank', style: 'font-weight:bold;color:#007bff' }, targetUrl));
+                this.urlEl.appendChild(E('a', { href: targetUrl, target: '_blank', style: 'font-weight:bold;color:' + theme.linkColor }, targetUrl));
             } else {
                 this.urlEl.textContent = T('服务未启动');
             }
