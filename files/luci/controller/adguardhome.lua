@@ -3,7 +3,6 @@ module("luci.controller.adguardhome", package.seeall)
 local util = require "luci.util"
 local fs = require "nixio.fs"
 local http = require "luci.http"
-local i18n = require "luci.i18n"
 
 local BIN_PATHS = {
     "/opt/AdGuardHome/AdGuardHome",
@@ -113,10 +112,8 @@ local function find_init_script()
 end
 
 function index()
-    -- 加载 i18n 翻译目录（确保 JS view 的 _() 函数能获取翻译）
-    i18n.loadc("adguardhome")
-
     -- 菜单入口由 menu.d/luci-app-adguardhome-dashboard.json 注册（LuCI 2.0 标准）
+    -- i18n 翻译由 menu.json 的 "i18n" 字段告知调度器自动加载
     -- 此处仅注册 API 子路由
     entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, true)
     entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, true)
