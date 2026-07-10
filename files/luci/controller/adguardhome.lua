@@ -208,9 +208,20 @@ end
 function do_action()
     local action = post_value("action")
 
-    if action ~= "start" and action ~= "stop" and action ~= "restart" and action ~= "install_service" then
+    if action ~= "start" and action ~= "stop" and action ~= "restart" and action ~= "install_service" and action ~= "install_core" then
         http.prepare_content("application/json")
         http.write_json({ success = false, error = "invalid action" })
+        return
+    end
+
+    -- install_core: 从 GitHub 官方脚本下载安装 AdGuard Home 核心
+    if action == "install_core" then
+        load_proxies()
+        local install_url = gh_url("https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh")
+        os.execute("echo '=== AdGuardHome 核心安装任务开始 ===' > " .. UPGRADE_LOG)
+        os.execute("curl -fsSL '" .. install_url .. "' | sh >> " .. UPGRADE_LOG .. " 2>&1 &")
+        http.prepare_content("application/json")
+        http.write_json({ success = true })
         return
     end
 

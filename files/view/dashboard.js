@@ -53,6 +53,13 @@ var _EN = {
     '最新版本：': 'Latest: ',
     '✔ 已下载': '✔ Installed',
     '✖ 未发现程序 (请运行官网命令安装)': '✖ Not found (Run official install command)',
+    '✖ 未安装': '✖ Not installed',
+    '下载安装': 'Download & Install',
+    '下载安装 AdGuard Home': 'Download & Install AdGuard Home',
+    '将从 GitHub 官方脚本下载安装 AdGuard Home 核心。安装期间请保持网络连接。': 'Will download and install AdGuard Home core from the official GitHub script. Please keep network connection stable.',
+    '确认安装': 'Confirm Install',
+    '安装任务已启动，请在下方日志查看器中查看进度': 'Install task started, check progress in the log viewer below',
+    '安装任务启动失败': 'Install task failed to start',
     '✔ 已安装系统服务 | ✔ 开机自启已注册': '✔ System service installed | ✔ Auto-start registered',
     '⚠️ 未注册服务 (使用二进制保底控制)': '⚠ Not registered (Using binary fallback)',
     '● 正在运行': '● Running',
@@ -247,7 +254,15 @@ return view.extend({
                         E('td', { class: 'td', style: 'width:32%;font-weight:bold' }, T('核心部署')),
                         E('td', { class: 'td' }, isBinInstalled
                             ? E('span', { style: 'color:#2dca73;font-weight:bold' }, T('✔ 已下载') + ' (' + (status.bin_path || '/opt/AdGuardHome/AdGuardHome') + ')')
-                            : E('span', { style: 'color:#e74c3c;font-weight:bold' }, T('✖ 未发现程序 (请运行官网命令安装)'))
+                            : E('span', {}, [
+                                E('span', { style: 'color:#e74c3c;font-weight:bold' }, T('✖ 未安装')),
+                                '  ',
+                                E('button', {
+                                    class: 'btn cbi-button cbi-button-apply',
+                                    style: 'margin-left:8px',
+                                    click: function() { self.doInstallCore(); }
+                                }, T('下载安装'))
+                            ])
                         )
                     ]),
                     E('tr', { class: 'tr' }, [
@@ -258,7 +273,15 @@ return view.extend({
                         E('td', { class: 'td', style: 'font-weight:bold' }, T('服务状态')),
                         E('td', { class: 'td' }, isServiceInstalled
                             ? E('span', { style: 'color:#2dca73' }, T('✔ 已安装系统服务 | ✔ 开机自启已注册'))
-                            : E('span', { style: 'color:#f39c12;font-weight:bold' }, T('⚠️ 未注册服务 (使用二进制保底控制)'))
+                            : E('span', {}, [
+                                E('span', { style: 'color:#f39c12;font-weight:bold' }, T('⚠️ 未注册服务')),
+                                '  ',
+                                E('button', {
+                                    class: 'btn cbi-button cbi-button-apply',
+                                    style: 'margin-left:8px;background-color:#9b59b6;color:#fff!important;text-shadow:0 -1px 0 rgba(0,0,0,0.3);font-weight:bold',
+                                    click: function() { self.execAction('install_service'); }
+                                }, T('注册系统服务'))
+                            ])
                         )
                     ]),
                     E('tr', { class: 'tr' }, [
@@ -457,6 +480,29 @@ return view.extend({
                 self.checkUpdateBtn.textContent = T('检查更新');
             }
         });
+    },
+
+    doInstallCore: function() {
+        var self = this;
+        ui.showModal(E('h4', {}, T('下载安装 AdGuard Home')), [
+            E('p', {}, T('将从 GitHub 官方脚本下载安装 AdGuard Home 核心。安装期间请保持网络连接。')),
+            E('div', { style: 'text-align:right; margin-top:15px;' }, [
+                E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
+                E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
+                    ui.hideModal();
+                    self.sendAction('install_core').then(function(res) {
+                        if (res && res.success) {
+                            ui.addNotification(null, T('安装任务已启动，请在下方日志查看器中查看进度'), 'info');
+                            self.startLogPolling();
+                        } else {
+                            ui.addNotification(null, T('安装任务启动失败'), 'error');
+                        }
+                    }).catch(function() {
+                        ui.addNotification(null, T('安装任务启动失败'), 'error');
+                    });
+                }}, T('确认安装'))
+            ])
+        ]);
     },
 
     doUpgrade: function(force) {
