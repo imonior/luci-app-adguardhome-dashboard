@@ -196,7 +196,7 @@ if [ -f "$AGH_BIN" ]; then
         fi
 
         log "从官方脚本重新安装 AdGuard Home..."
-        curl -fsSL "$AGH_INSTALL_URL" | sh
+        curl -fsSL "$AGH_INSTALL_URL" | sh -s -- -r
         log "AdGuard Home 安装完成"
     else
         log "跳过 AdGuard Home 核心安装，保留当前版本"
