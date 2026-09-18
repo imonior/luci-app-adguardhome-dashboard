@@ -373,7 +373,14 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 
 ## Changelog
 
-- **v2.5.7**
+- **v2.5.8**
+  - **Offline install package**: every release now ships a self-contained tarball (built by `scripts/make_package.sh` + the release workflow on tag push). Download, extract, run `scripts/install.sh` — the `OFFLINE_PACKAGE` marker gates **every** network touchpoint (geo probe, connection selection, online version check, file downloads)
+  - **AdGuard Home core is supplied locally, never bundled**: the installer scans `AdGuardHome_linux_<arch>.tar.gz` next to the project (two levels: project dir + parent) and installs the core fully offline, mirroring the official three steps (clean dir → `tar -C /opt -x -z` → `-s install`) with a `--version` self-check and full rollback on any failure. A matching package + existing core → asked whether to overwrite; arch mismatch → prints both sides (this machine vs. packages found); no package → prints the exact filename plus **direct download links** (AGH CDN `static.adtidy.org` and the GitHub release asset, the latter mirror-friendly for mainland China) and the release page
+  - **Existing-install detection for both AGH core and this panel**, online and offline alike: existing installs are detected first and you are asked whether to reinstall (panel defaults to reinstall; core overwrite defaults to keep)
+  - **Version Rollback documented** (see its own section): in-panel downgrade is not supported; any released version installs from its tag source archive with a one-liner; retracting a release = `git revert` on `main`
+  - The overwrite cleanup criterion is now the install **directory** (`-d /opt/AdGuardHome`) instead of the binary, so leftover directories cannot mix stale files into a fresh install
+  - Three bare `read` calls hardened against `set -e` + stdin EOF (previously could silently abort the whole install)
+  - All of the v2.5.7 work below shipped in this release (v2.5.7 was never published as its own version)
   - Replaced the dashboard version comparator (`semver_compare`, which compared all numeric segment naively and could not order prerelease versions) with a SemVer-correct implementation (`compareSemVer`/`parseSemVer`); a release build now correctly reports as newer than its own beta, so panel self-upgrade prompts behave correctly after any prerelease line
   - Added a third fallback for AdGuard Home core update checks: `static.adtidy.org/adguardhome/release/version.json` (AdGuard Team's own CDN), reached when both GitHub API and raw CHANGELOG paths fail — improves reachability on networks where GitHub is blocked
   - Fixed a cosmetic log bug: the upgraded-binary line printed a double `v` (`vv0.107.79`) because the version already includes the `v` prefix

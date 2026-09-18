@@ -37,6 +37,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
+          # Release body is English by default: a short install hint + GitHub's
+          # auto-generated changelog link.
+          NOTES=$(cat <<'EOF'
+          Offline install: download the tarball below, extract it, then run
+          `scripts/install.sh` — see INSTALL.md inside the package for details.
+          The AdGuard Home core is never bundled; drop the official
+          `AdGuardHome_linux_<arch>.tar.gz` next to the extracted folder and the
+          installer picks it up automatically.
+          EOF
+          )
           # 未匹配到时会把字面量 dist/*.tar.gz 传给 gh 并报错，正好起到断言作用。
           # A non-matching glob is passed literally to gh, which then fails — a built-in assertion.
-          gh release create "$TAG" --title "$TAG" --generate-notes dist/*.tar.gz
+          gh release create "$TAG" --title "$TAG" --notes "$NOTES" --generate-notes dist/*.tar.gz
