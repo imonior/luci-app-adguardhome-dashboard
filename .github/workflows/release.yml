@@ -1,0 +1,42 @@
+name: Release
+
+# 打 tag 即发版：自动打包并把离线安装包作为 Release 资产上传。
+# Pushing a tag publishes the release and attaches the offline install tarball.
+#
+#   git tag v2.5.7 && git push origin v2.5.7
+#
+# The tarball is built from the checked-out tag, so its content always matches
+# the tag — and scripts/make_package.sh aborts if files/ disagrees with
+# checksums.sha256, which makes a stale manifest fail the release loudly.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create the release and upload assets
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sanity check the content-fingerprint manifest
+        run: |
+          # 与 install.sh 的校验口径一致：任何与发布清单不符的内容都必须让发版失败。
+          # Same check the installer performs; a stale/incorrect manifest must fail here.
+          sha256sum -c checksums.sha256
+
+      - name: Build the offline install package
+        run: sh scripts/make_package.sh
+
+      - name: Create release and upload the package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # 未匹配到时会把字面量 dist/*.tar.gz 传给 gh 并报错，正好起到断言作用。
+          # A non-matching glob is passed literally to gh, which then fails — a built-in assertion.
+          gh release create "$TAG" --title "$TAG" --generate-notes dist/*.tar.gz

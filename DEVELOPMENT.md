@@ -49,4 +49,49 @@ python3 tools/po2lmo.py files/luci/i18n/adguardhome.zh-cn.po files/luci/i18n/adg
 4. Bump the `version` field in `manifest.json` using semantic versioning. **The version is a single source of truth**: the router's `adguardhome.lua` reads the locally deployed `/usr/share/adguardhome-dashboard/manifest.json` at runtime to get the installed version (it no longer depends on the hardcoded `DASHBOARD_VERSION` constant, which only serves as a fallback when the local manifest is missing). So a release only requires changing one number in `manifest.json` — no manual lua constant sync.
 5. `git add files/ checksums.sha256 manifest.json && git commit -m "bump dashboard to x.y.z" && git push origin main`
 
-After pushing to main, every router can click "Check panel update" to see the new version and upgrade online.
+   After pushing to main, every router can click "Check panel update" to see the new version and upgrade online.
+
+6. Tag and push to publish the offline install package as a release asset:
+
+   ```sh
+   git tag vX.Y.Z && git push origin vX.Y.Z
+   ```
+
+   `.github/workflows/release.yml` then checks out the tag, re-runs `sha256sum -c checksums.sha256`, builds the tarball via `scripts/make_package.sh` and attaches it to the GitHub Release.
+
+   > **The tag version must match `manifest.json`.** The panel reads the deployed `manifest.json` to learn the installed version, so a mismatch makes "Check panel update" compare against the wrong number.
+
+---
+
+## 4. Offline install package
+
+`scripts/make_package.sh` builds a self-contained tarball that installs with **zero network access**:
+
+```sh
+sh scripts/make_package.sh      # -> dist/luci-app-adguardhome-dashboard-vX.Y.Z.tar.gz
+```
+
+Layout (deliberately identical to the repo, so `install.sh`'s existing "install using local files" branch is reused with no separate offline installer to maintain):
+
+```
+luci-app-adguardhome-dashboard-vX.Y.Z/
+├── files/…                 # the deployable files
+├── scripts/install.sh      # SCRIPT_DIR=<pkg>/scripts
+├── scripts/uninstall.sh
+├── manifest.json           # PROJECT_ROOT=<pkg>
+├── checksums.sha256        # verified against files/ before packing
+├── OFFLINE_PACKAGE         # marker: makes install.sh skip ALL networking
+├── INSTALL.md
+└── AdGuardHome_linux_<arch>.tar.gz   # OPTIONAL, user-supplied (never shipped)
+```
+
+Because `SCRIPT_DIR` resolves to `<pkg>/scripts`, `PROJECT_ROOT` becomes `<pkg>` and `LOCAL_FILES` becomes `<pkg>/files` — exactly what the existing local-files branch expects.
+
+Key behaviours when `OFFLINE_PACKAGE` is present (or `-l` is passed):
+
+- No egress-IP probe, no connection test, no online version lookup, and no re-download when verification fails — a mismatch against the bundled `checksums.sha256` aborts instead.
+- The AdGuard Home **core** is neither shipped nor downloaded. `install.sh` scans the package folder and its parent for `AdGuardHome_linux_<arch>.tar.gz`; when one matches the machine's architecture it is unpacked into `/opt/AdGuardHome` and registered via `./AdGuardHome -s install` — still fully offline. A missing or mismatched tarball degrades to panel-only and prints exactly which architecture to fetch. Skipping the online path explicitly matters: `curl … | sh` would otherwise "succeed" on an empty input, since the pipeline exit status comes from `sh`.
+- The architecture map mirrors AdGuardHome's official `install.sh` (`uname -m` → `amd64` / `arm64` / `armv7` / `armv5` / `mipsle_softfloat` …). The MIPS byte-order test uses `hexdump`, which OpenWrt ships (`od` does not exist there).
+- After unpacking, the installer runs `<bin> --version` and rolls back on failure, so a "right file name, wrong contents" tarball can never register a broken service. Overwrites are keyed on the **directory** (`/opt/AdGuardHome`), not the binary, so a leftover stale directory is cleared too.
+- Existing installs are detected before anything is touched — for both the AGH core and this panel, in online and offline runs alike. Declining the panel prompt exits cleanly without changes.
+- If `files/` is missing, the installer aborts with a clear message instead of falling back to a download.

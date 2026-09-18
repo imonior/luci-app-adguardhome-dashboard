@@ -1,7 +1,7 @@
 {
   "id": "luci-app-adguardhome-dashboard",
   "name": "AdGuard Home Dashboard",
-  "version": "2.5.6",
+  "version": "2.5.8",
   "description": "LuCI 2.0 dashboard for AdGuard Home with Lua Controller RPC, real-time status polling, layered log viewer (exec + runtime + system), global proxy with latency test, one-click upgrade for AGH core and dashboard itself, backup management with one-click restore, and two-phase commit with auto-rollback.",
   "author": "imonior",
   "license": "MIT",

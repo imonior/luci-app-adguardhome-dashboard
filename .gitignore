@@ -11,3 +11,7 @@
 # deploy_atomic.sh 使用；面板自升级上线后改走「面板内检查面板更新 → 升级面板」
 # 在线完成，本目录无需保留在 GitHub 仓库。
 changes_package/
+
+# dist/ 是 scripts/make_package.sh 生成的离线安装包（发布压缩包）输出目录，
+# 属于构建产物，不进仓库；发版时由 GitHub Actions 生成并作为 Release 资产上传。
+dist/

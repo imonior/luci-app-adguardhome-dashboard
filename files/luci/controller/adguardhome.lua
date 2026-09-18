@@ -50,42 +50,86 @@ local DASH_FILES = {
     { src = "manifest.json",                            dst = "/usr/share/adguardhome-dashboard/manifest.json",  base = "manifest.json",          kind = "json", min_size = 20 }
 }
 
-local PRIMARY_PROXY = ""
+-- 代理规格（wire 格式，与 install.sh / 面板共用；持久化于 /etc/adguardhome-dashboard.proxy）：
+--   mirror|<prefix>  镜像源：把原 URL 拼到前缀后面（**仅中国大陆有效**）
+--   proxy|<addr>     全量代理服务器：curl -x，URL 不变（类似系统代理，任意地区可用）
+--   ""               直连
+-- 向后兼容：不带竖线的裸值按 mirror 处理（历史文件格式）。
+-- Proxy spec wire format shared with install.sh / the dashboard. A bare value without "|"
+-- is treated as a mirror (legacy file format).
+local PRIMARY_PROXY = ""        -- 规格字符串（沿用旧变量名，日志/生成脚本直接复用）
+local PRIMARY_MODE = "direct"   -- mirror | proxy | direct
+local PRIMARY_ADDR = ""         -- 具体地址；空 = 直连
 local PROXY_LIST = {}
+
+-- 解析规格 → mode, addr。/ Parse a spec into (mode, addr).
+local function parse_proxy_spec(spec)
+    if not spec or spec == "" then return "direct", "" end
+    local m, v = spec:match("^(%a+)%|(.*)$")
+    if m == "mirror" or m == "proxy" then
+        if not v or v == "" then return "direct", "" end
+        return m, v
+    end
+    return "mirror", spec
+end
+
+-- 合法性校验（防命令注入 + 防拼出非法 URL）。
+-- ⚠ 必须定义在 resolve_proxy **之前**：Lua 词法作用域下，前置引用会编译成全局访问，
+-- 运行时报 "attempt to call a nil value (global ...)"。
+-- MUST stay ABOVE resolve_proxy — a forward reference compiles to a global (nil) call.
+local function is_safe_spec(spec)
+    if spec == nil then return false end
+    if spec == "" then return true end
+    local mode, addr = parse_proxy_spec(spec)
+    if addr == "" then return true end
+    if addr:match("['\"`$;|&()<>%s\\]") then return false end
+    if mode == "proxy" then
+        -- 全量代理：scheme://host[:port][/path] 或裸 host:port
+        if addr:match("^[%w%.%-]+://[%w%.%-:@/]+$") then return true end
+        if addr:match("^[%w%.%-]+:%d+$") then return true end
+        return false
+    end
+    return addr:match("^https?://[%w%.%-/_:]+$") ~= nil
+end
 
 local function get_persisted_proxy()
     if fs.access(PROXY_CONF) then
         local content = fs.readfile(PROXY_CONF) or ""
-        local saved = content:match("proxy%s*=%s*(%S*)")
-        if saved then return saved end
+        -- 规格里可能含 "|"，故取到行尾再裁掉尾部空白 / the spec may contain "|": grab to EOL, then trim
+        local saved = content:match("proxy%s*=%s*([^\n]*)")
+        if saved then
+            saved = saved:gsub("%s+$", "")
+            return saved
+        end
     end
     return ""
 end
 
-local function load_proxies()
-    -- 严格遵守 UI 中的代理选择：只使用用户持久化的代理，不再无条件追加内置代理。
-    -- Strictly honor the UI proxy selection: only use the persisted proxy; do NOT
-    -- unconditionally append built-in proxies.
-    --   - 选择 direct(空)  → 仅直连，不使用任何代理
-    --   - 指定某代理       → 仅该代理（下载循环另含直连兜底），不使用其他未选代理
-    -- 此前无论选什么都会把 3 个内置代理塞进候选列表，导致选 direct 时后台仍走代理。
-    -- Previously all 3 built-in proxies were always appended, so even "direct" used proxies.
-    PRIMARY_PROXY = get_persisted_proxy()
+-- 设置当前生效规格（同时刷新 mode/addr 与候选列表）
+-- Set the effective spec and refresh mode/addr plus the candidate list.
+local function set_primary_spec(spec)
+    PRIMARY_PROXY = spec or ""
+    PRIMARY_MODE, PRIMARY_ADDR = parse_proxy_spec(PRIMARY_PROXY)
     PROXY_LIST = {}
-    if PRIMARY_PROXY ~= "" then
-        PROXY_LIST[#PROXY_LIST + 1] = PRIMARY_PROXY
-    end
+    if PRIMARY_PROXY ~= "" then PROXY_LIST[1] = PRIMARY_PROXY end
+end
+
+local function load_proxies()
+    -- 严格遵守 UI / 安装时的选择：只使用持久化的规格，不再无条件追加内置镜像。
+    --   - 直连(空)   → 仅直连，不使用任何代理
+    --   - 指定规格   → 仅该规格（升级脚本另含直连兜底），不使用其它未选代理
+    -- Strictly honor the persisted spec: no silent fallback to other proxies.
+    set_primary_spec(get_persisted_proxy())
 end
 
 -- 解析本次请求实际使用的代理：优先采用 UI 实时选择（请求携带的 proxy 参数），
--- 否则回退到持久化代理（install 写入 /etc/adguardhome-dashboard.proxy）。
+-- 否则回退到持久化规格（install.sh 或面板写入 /etc/adguardhome-dashboard.proxy）。
 -- Resolve the effective proxy for THIS request: prefer the UI selection carried in the
--- request, else fall back to the persisted proxy. Honors "切换代理实时生效" (immediate effect).
+-- request, else fall back to the persisted spec. Honors "切换代理实时生效".
 local function resolve_proxy()
     local p = http.formvalue("proxy")
-    if p and is_safe_proxy(p) then
-        PRIMARY_PROXY = p
-        PROXY_LIST = { p }
+    if p ~= nil and is_safe_spec(p) then
+        set_primary_spec(p)
         return
     end
     load_proxies()
@@ -96,32 +140,41 @@ end
 -- each attempt to it (used only by check endpoints, to show the test process in the log viewer).
 local TRY_LOG = nil
 
-local function is_safe_proxy(p)
-    if p == nil then return false end
-    if p == "" then return true end
-    if p:match("['\"`$;|&()<>%s\\]") then return false end
-    if not p:match("^https?://[%w%.%-/_:]+$") then return false end
-    return true
-end
-
--- 把代理前缀规范化为「以 / 结尾」，避免用户漏写结尾斜杠导致拼接出非法 URL
--- （如 https://ghfast.tophttps://...）。用于代理测试与版本/升级下载。
--- Normalize a proxy prefix to end with '/', so a missing trailing slash can't produce
--- an invalid concatenated URL (e.g. https://ghfast.tophttps://...). Used by proxy_test and try_with_proxies.
+-- 把镜像前缀规范化为「以 / 结尾」，避免用户漏写结尾斜杠导致拼接出非法 URL
+-- （如 https://ghfast.tophttps://...）。仅用于 mirror 类型。
+-- Normalize a MIRROR prefix to end with '/', so a missing trailing slash can't produce
+-- an invalid concatenated URL. Used by mirror specs only.
 local function proxify(p, url)
     if p == nil or p == "" then return url end
     if p:sub(-1) == "/" then return p .. url end
     return p .. "/" .. url
 end
 
+-- 依据规格构造一次 curl 调用，返回 (curl_url, curl_prefix_args, display_text)：
+--   mirror → 拼接后的 URL；proxy → 原 URL + "-x '<addr>' "；direct → 原 URL
+-- Build one curl invocation for a spec. Returns (url, prefix_args, display_text).
+local function curl_conn(spec, url)
+    local mode, addr = parse_proxy_spec(spec)
+    if mode == "proxy" and addr ~= "" then
+        return url, "-x '" .. addr .. "' ", url .. " (proxy " .. addr .. ")"
+    end
+    if mode == "mirror" and addr ~= "" then
+        local t = proxify(addr, url)
+        return t, "", t
+    end
+    return url, "", url
+end
+
 local function try_with_proxies(url, expect_json)
     local expect = expect_json or false   -- true = 必须是合法 JSON（非 HTML/404 页）
-    local tried = {}
-    local function attempt(target, timeout)
+    local function attempt(target_url, timeout)
+        -- 按当前规格构造真实请求：镜像 = 前缀拼接，全量代理 = -x，直连 = 原样
+        -- Build the real invocation for the current spec (mirror prefix / -x / direct).
+        local tgt, pre, disp = curl_conn(PRIMARY_PROXY, target_url)
         if TRY_LOG then
-            util.exec("echo '  trying: " .. target .. "' >> " .. TRY_LOG)
+            util.exec("echo '  trying: " .. disp .. "' >> " .. TRY_LOG)
         end
-        local out = util.exec("curl -m " .. timeout .. " -fsSL '" .. target .. "' 2>/dev/null")
+        local out = util.exec("curl -m " .. timeout .. " -fsSL " .. pre .. "'" .. tgt .. "' 2>/dev/null")
         if not out or #out < 10 then return nil end
         -- 过滤掉 GitHub 返回的 403/404 HTML 错误页（curl -f 应该拦截但某些代理会篡改响应码） / Drop 403/404 HTML error pages returned by GitHub (curl -f should block these, but some proxies tamper with the status code)
         if out:find("^<!DOCTYPE HTML", 1, true)
@@ -141,8 +194,8 @@ local function try_with_proxies(url, expect_json)
     -- 严格使用用户选定的代理：选中某代理则只走该代理，选中直连(direct/空)则只走直连，
     -- 不再静默回退到直连或其它代理（避免“已选定的 proxy 自己跳”）。
     -- 失败时返回空串，由调用方（check/upgrade 端点）明确报错，用户可改选代理重试。
-    if PRIMARY_PROXY ~= "" then
-        local r = attempt(proxify(PRIMARY_PROXY, url), 10)
+    if PRIMARY_ADDR ~= "" then
+        local r = attempt(url, 10)
         if r then return r end
         return ""
     end
@@ -179,6 +232,7 @@ function index()
     entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, true)
     entry({"admin", "services", "adguardhome", "set_proxy"}, call("set_proxy"), nil, true)
     entry({"admin", "services", "adguardhome", "proxy_test"}, call("proxy_test"), nil, true)
+    entry({"admin", "services", "adguardhome", "geo_probe"}, call("geo_probe"), nil, true)
     entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, true)
     entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
     entry({"admin", "services", "adguardhome", "check_dashboard_update"}, call("check_dashboard_update"), nil, true)
@@ -354,6 +408,13 @@ local function parse_agh_version_from_changelog(text)
     return ""
 end
 
+-- 从 AdGuard 官方更新索引解析版本（AdGuard Team 自家 CDN，国内通常比 GitHub 更可达）
+-- Parse version from AdGuard's own update index (AdGuard Team's CDN; often more reachable than GitHub in CN)
+local function parse_adtidy_version(text)
+    if not text or #text == 0 then return "" end
+    return text:match('"version"%s*:%s*"([^"]+)"') or ""
+end
+
 function check_update()
     resolve_proxy()
     local time_str = os.date("%Y-%m-%d %H:%M:%S")
@@ -378,6 +439,14 @@ function check_update()
         if out_cl and #out_cl > 0 then
             latest = parse_agh_version_from_changelog(out_cl)
         end
+    end
+
+    -- 第三条兜底：static.adtidy.org 官方更新索引（AdGuard Team 自家 CDN，适用于 GitHub 两条路都不可达的网络）
+    -- Third fallback: static.adtidy.org update index (AdGuard Team's own CDN; for networks where both GitHub paths fail)
+    if latest == "" then
+        local idx = try_with_proxies("https://static.adtidy.org/adguardhome/release/version.json", true)
+        local v = parse_adtidy_version(idx)
+        if v ~= "" then latest = v end
     end
 
     TRY_LOG = nil
@@ -410,10 +479,39 @@ function launch_core_upgrade(force)
     add("BIN_PATH='" .. (bin_path or "") .. "'")
     add("FORCE='" .. (force and "1" or "0") .. "'")
     add("PRIMARY_PROXY='" .. PRIMARY_PROXY .. "'")
+    add("PROXY_MODE='" .. PRIMARY_MODE .. "'")
+    add("PROXY_ADDR='" .. PRIMARY_ADDR .. "'")
     add("PROXY_CANDIDATES='" .. candidates_str .. "'")
     add("INIT_SCRIPTS='" .. init_scripts_str .. "'")
     add("BIN_PATHS='" .. bin_paths_str .. "'")
     add("INSTALL_BASE='" .. install_base .. "'")
+    add("")
+    add([==[
+# ── 统一网络出口：mirror=前缀拼接 / proxy=curl -x / direct=原样 ──
+# URL 必须是第 1 个参数，其余参数原样转给 curl（与 install.sh 的 gh_curl 语义一致）。
+# Unified curl wrapper: URL first, remaining args pass through. Mirrors install.sh's gh_curl.
+norm_mirror() { case "$1" in */) printf '%s' "$1" ;; *) printf '%s/' "$1" ;; esac; }
+
+dl_curl() {
+  dc_spec="$1"; dc_url="$2"; shift 2
+  case "$dc_spec" in
+    ""|direct)  curl "$@" "$dc_url" ;;
+    proxy\|*)   curl -x "${dc_spec#proxy|}" "$@" "$dc_url" ;;
+    mirror\|*)  curl "$@" "$(norm_mirror "${dc_spec#mirror|}")$dc_url" ;;
+    *)          curl "$@" "$(norm_mirror "$dc_spec")$dc_url" ;;
+  esac
+}
+
+# 人类可读的目标（写日志用，不泄露给用户以外的地方）
+dl_disp() {
+  case "$1" in
+    ""|direct)  printf '%s' "$2" ;;
+    proxy\|*)   printf '%s (proxy %s)' "$2" "${1#proxy|}" ;;
+    mirror\|*)  printf '%s' "$(norm_mirror "${1#mirror|}")$2" ;;
+    *)          printf '%s' "$(norm_mirror "$1")$2" ;;
+  esac
+}
+]==])
     add("")
     add("cleanup() { rm -f /tmp/agh_install_${TS}.sh 2>/dev/null; }")
     add("trap 'cleanup' EXIT INT TERM")
@@ -436,9 +534,8 @@ function launch_core_upgrade(force)
     add("  for fi_p in \"$PRIMARY_PROXY\" \"\" $PROXY_CANDIDATES; do")
     add("    [ \"$fi_p\" = \"$fi_seen\" ] && continue")
     add("    fi_seen=\"$fi_p\"")
-    add("    if [ -n \"$fi_p\" ]; then fi_url=\"${fi_p}${INSTALL_BASE}\"; else fi_url=\"$INSTALL_BASE\"; fi")
-    add("    echo \"   try: $fi_url\" >> \"$LOG\"")
-    add("    if curl -m 30 -fsSL -o \"$fi_out\" \"$fi_url\" 2>>\"$LOG\"; then")
+    add("    echo \"   try: $(dl_disp \"$fi_p\" \"$INSTALL_BASE\")\" >> \"$LOG\"")
+    add("    if dl_curl \"$fi_p\" \"$INSTALL_BASE\" -m 30 -fsSL -o \"$fi_out\" 2>>\"$LOG\"; then")
     add("      [ -s \"$fi_out\" ] && return 0")
     add("    fi")
     add("  done")
@@ -482,8 +579,7 @@ get_latest_agh_version() {
   for p in "$PRIMARY_PROXY" "" $PROXY_CANDIDATES; do
     [ "$p" = "$seen" ] && continue
     seen="$p"
-    local api; if [ -n "$p" ]; then api="${p}https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest"; else api="https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest"; fi
-    out=$(curl -m 10 -fsSL "$api" 2>/dev/null)
+    out=$(dl_curl "$p" "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" -m 10 -fsSL 2>/dev/null) || out=""
     if [ -n "$out" ]; then
       v=$(printf '%s' "$out" | grep -m1 '"tag_name"' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
       [ -n "$v" ] && { printf '%s' "$v"; return 0; }
@@ -493,8 +589,7 @@ get_latest_agh_version() {
   for p in "$PRIMARY_PROXY" "" $PROXY_CANDIDATES; do
     [ "$p" = "$seen2" ] && continue
     seen2="$p"
-    local cl; if [ -n "$p" ]; then cl="${p}https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/CHANGELOG.md"; else cl="https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/CHANGELOG.md"; fi
-    out=$(curl -m 15 -fsSL "$cl" 2>/dev/null)
+    out=$(dl_curl "$p" "https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/CHANGELOG.md" -m 15 -fsSL 2>/dev/null) || out=""
     if [ -n "$out" ]; then
       v=$(printf '%s' "$out" | awk 'BEGIN{incom=0} /<!--/{if($0 !~ /-->/) incom=1; next} /-->/{incom=0; next} !incom && /^##[[:space:]]*\[v?[0-9]+\.[0-9]+\.[0-9]+\]/{match($0,/v?[0-9]+\.[0-9]+\.[0-9]+/); print substr($0,RSTART,RLENGTH); exit}')
       [ -n "$v" ] && { printf '%s' "$v"; return 0; }
@@ -510,9 +605,8 @@ download_pkg_via_proxy() {
   for p in "$PRIMARY_PROXY" "" $PROXY_CANDIDATES; do
     [ "$p" = "$seen" ] && continue
     seen="$p"
-    local url; if [ -n "$p" ]; then url="${p}${base}"; else url="$base"; fi
-    echo "   [fallback] try: $url" >> "$LOG"
-    if curl -m 60 -fsSL -o "$out" "$url" 2>>"$LOG"; then
+    echo "   [fallback] try: $(dl_disp "$p" "$base")" >> "$LOG"
+    if dl_curl "$p" "$base" -m 60 -fsSL -o "$out" 2>>"$LOG"; then
       [ -s "$out" ] && return 0
     fi
   done
@@ -590,8 +684,13 @@ fallback_upgrade_via_proxy() {
     add("    UPGRADE_RC=1")
     add("  fi")
     add("elif [ -n \"$BIN_PATH\" ]; then")
-    add("  echo '   mode: AdGuardHome --update (proxy NOT applied; package fetched DIRECT from static.adtidy.org)' >> \"$LOG\"")
-    add("  \"$BIN_PATH\" --update >> \"$LOG\" 2>&1")
+    add("  if [ \"$PROXY_MODE\" = \"proxy\" ] && [ -n \"$PROXY_ADDR\" ]; then")
+    add("    echo '   mode: AdGuardHome --update (full proxy applied via HTTPS_PROXY; mirror type cannot proxy this step)' >> \"$LOG\"")
+    add("    HTTPS_PROXY=\"$PROXY_ADDR\" HTTP_PROXY=\"$PROXY_ADDR\" \"$BIN_PATH\" --update >> \"$LOG\" 2>&1")
+    add("  else")
+    add("    echo '   mode: AdGuardHome --update (proxy NOT applied; package fetched DIRECT from static.adtidy.org)' >> \"$LOG\"")
+    add("    \"$BIN_PATH\" --update >> \"$LOG\" 2>&1")
+    add("  fi")
     add("  UPGRADE_RC=$?")
     add("  if [ \"$UPGRADE_RC\" != \"0\" ]; then")
     add("    echo '   [fallback] AdGuardHome --update failed (rc='\"$UPGRADE_RC\"'); trying proxy-aware package download + overwrite' >> \"$LOG\"")
@@ -640,7 +739,7 @@ fallback_upgrade_via_proxy() {
     add("  if \"$NEW_BIN\" --version 2>/dev/null | grep -q '.'; then")
     add("    NEW_VERSION=$(get_version \"$NEW_BIN\")")
     add("    [ -z \"$NEW_VERSION\" ] && NEW_VERSION='unknown'")
-    add("    echo \"   new binary: $NEW_BIN (v$NEW_VERSION)\" >> \"$LOG\"")
+    add("    echo \"   new binary: $NEW_BIN ($NEW_VERSION)\" >> \"$LOG\"")
     add("  else")
     add("    echo \"   [verify] binary cannot run: $NEW_BIN\" >> \"$LOG\"")
     add("    VERIFY_OK=0")
@@ -689,8 +788,9 @@ function do_upgrade()
 end
 
 function set_proxy()
+    -- 接受复合规格：mirror|<prefix> / proxy|<addr> / ""（直连）；裸值按 mirror 兼容
     local proxy = post_value("proxy") or ""
-    if not is_safe_proxy(proxy) then
+    if not is_safe_spec(proxy) then
         http.prepare_content("application/json")
         http.write_json({ success = false, error = "invalid proxy" })
         return
@@ -715,15 +815,16 @@ function proxy_test()
     load_proxies()
     local proxy = post_value("proxy")
     if proxy == nil then proxy = PRIMARY_PROXY end
-    if not is_safe_proxy(proxy) then
+    if not is_safe_spec(proxy) then
         http.prepare_content("application/json")
         http.write_json({ ok = false, error = "invalid proxy" })
         return
     end
     local test_url = "https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/README.md"
-    local target = proxify(proxy, test_url)
+    -- 按规格出命令：镜像=前缀拼接，全量代理=-x，直连=原样
+    local target, pre = curl_conn(proxy, test_url)
 
-    local cmd = "curl -m 8 -fsSL -o /dev/null -w 'TIME:%{time_total}' '" .. target .. "' 2>/dev/null; echo 'EXIT:'$?"
+    local cmd = "curl -m 8 -fsSL " .. pre .. "-o /dev/null -w 'TIME:%{time_total}' '" .. target .. "' 2>/dev/null; echo 'EXIT:'$?"
     local out = util.exec(cmd) or ""
     local latency_str = out:match("TIME:([%d%.]+)") or ""
     local exit_str = out:match("EXIT:(%d+)") or "1"
@@ -732,6 +833,80 @@ function proxy_test()
     if latency then latency = math.floor(latency * 1000) end
     http.prepare_content("application/json")
     http.write_json({ ok = ok, latency = latency })
+end
+
+-- Extract the first scalar "key":"value" from a JSON blob (good enough for simple fields).
+-- 从 JSON 中抽取第一个 "key":"value" 标量（适用于简单字段）。
+local function _json_field(out, key)
+    local pat = '"' .. key .. '"%s*:%s*"([^"]*)"'
+    return out:match(pat)
+end
+
+-- Detect the router's egress public IP and region by querying several public geo-IP
+-- services in order (each with a short timeout), stopping at the first that replies.
+-- 通过依次查询多个公开 geo-IP 服务（各自短超时）检测路由器出口公网 IP 与归属地，取首个响应。
+-- is_cn: nil = unknown (all failed / no country), true = mainland CN, false = elsewhere.
+-- is_cn：nil=未知（全部失败/无国家），true=中国大陆，false=境外。
+local GEO_APIS = {
+    { url = "https://ip-api.com/json/?fields=status,message,country,countryCode,regionName,city,query", fmt = "ipapi" },
+    { url = "https://ipinfo.io/json", fmt = "ipinfo" },
+    { url = "https://api.ip.sb/geoip", fmt = "ipsb" },
+    { url = "https://api.ipify.org?format=json", fmt = "ipify" }
+}
+
+function geo_probe()
+    local result = { ok = false, ip = "", country = "", country_code = "", region = "", city = "", is_cn = nil, source = "" }
+    for _, api in ipairs(GEO_APIS) do
+        local out = util.exec("curl -m 4 -fsSL '" .. api.url .. "' 2>/dev/null") or ""
+        out = out:gsub("^%s+", ""):gsub("%s+$", "")
+        local ip
+        if #out >= 5 then
+            local cc, country, region, city
+            if api.fmt == "ipapi" then
+                ip = _json_field(out, "query")
+                country = _json_field(out, "country")
+                cc = _json_field(out, "countryCode")
+                region = _json_field(out, "regionName")
+                city = _json_field(out, "city")
+                if _json_field(out, "status") == "fail" then ip = nil end
+            elseif api.fmt == "ipinfo" then
+                ip = _json_field(out, "ip")
+                cc = _json_field(out, "country")
+                region = _json_field(out, "region")
+                city = _json_field(out, "city")
+            elseif api.fmt == "ipsb" then
+                ip = _json_field(out, "ip")
+                cc = _json_field(out, "country_code")
+                country = _json_field(out, "country")
+                region = _json_field(out, "region")
+                city = _json_field(out, "city")
+            elseif api.fmt == "ipify" then
+                ip = _json_field(out, "ip")
+            end
+            if ip and #ip > 0 then
+                result.ip = ip
+                result.country_code = cc or ""
+                result.country = country or ""
+                result.region = region or ""
+                result.city = city or ""
+                result.source = (api.url:match("^https?://([^/]+)") or "")
+                result.ok = true
+                local is_cn = nil
+                if cc and cc:upper() == "CN" then
+                    is_cn = true
+                elseif cc and #cc == 2 then
+                    is_cn = false
+                end
+                if country and (country:find("中国") or country:lower():find("china")) then
+                    is_cn = true
+                end
+                result.is_cn = is_cn
+                break
+            end
+        end
+    end
+    http.prepare_content("application/json")
+    http.write_json(result)
 end
 
 function get_log()
@@ -800,22 +975,67 @@ function clear_log()
     http.write_json({ success = true })
 end
 
-local function semver_compare(a, b)
-    if not a or not b then return nil end
-    local at, bt = {}, {}
-    for n in string.gmatch(a, "%d+") do at[#at + 1] = tonumber(n) or 0 end
-    for n in string.gmatch(b, "%d+") do bt[#bt + 1] = tonumber(n) or 0 end
-    if #at == 0 or #bt == 0 then return nil end
-    local maxn = #at > #bt and #at or #bt
-    for i = 1, maxn do
-        local ai = at[i] or 0
-        local bi = bt[i] or 0
-        if ai < bi then return -1 end
-        if ai > bi then return 1 end
+-- SemVer 解析/比较（正确排序预发布号，例如 2.6.0-beta.1 < 2.6.0）
+-- SemVer parser & comparator (prerelease ordering correct, e.g. 2.6.0-beta.1 < 2.6.0)
+-- 注意：Lua 模式匹配没有 ? 量词（那是 PCRE/Python 正则语法），必须用 Lua pattern。
+-- NOTE: Lua patterns have NO `?` quantifier; use Lua pattern syntax.
+local function parseSemVer(version)
+    if not version then return nil end
+    version = tostring(version):gsub("^v", ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local major, minor, patch, rest = version:match("^(%d+)%.(%d+)%.(%d+)(.*)$")
+    if not major then return nil end
+    local pre = nil
+    if rest and rest ~= "" then
+        pre = rest:gsub("^%-", ""):gsub("%+.*$", "")
+        if pre == "" then pre = nil end
+    end
+    return {
+        major = tonumber(major) or 0,
+        minor = tonumber(minor) or 0,
+        patch = tonumber(patch) or 0,
+        prerelease = pre
+    }
+end
+
+local function split_prerelease(s)
+    local parts = {}
+    for part in (s or ""):gmatch("[^%.]+") do
+        parts[#parts + 1] = part
+    end
+    return parts
+end
+
+-- SemVer 规则：逐段比较；数字段按数值比，非数字段按字典序；段数少者优先级更低。
+-- SemVer rule: compare identifier by identifier; numeric by value, alphanumeric lexically;
+-- a shorter set has lower precedence.
+local function compare_prerelease(a, b)
+    local pa, pb = split_prerelease(a), split_prerelease(b)
+    local n = (#pa > #pb) and #pa or #pb
+    for i = 1, n do
+        local x, y = pa[i], pb[i]
+        if x == nil then return -1 end
+        if y == nil then return 1 end
+        local nx, ny = tonumber(x), tonumber(y)
+        if nx and ny then
+            if nx ~= ny then return (nx < ny) and -1 or 1 end
+        elseif x ~= y then
+            return (x < y) and -1 or 1
+        end
     end
     return 0
 end
 
+local function compareSemVer(a, b)
+    local va, vb = parseSemVer(a), parseSemVer(b)
+    if not va or not vb then return nil end
+    if va.major ~= vb.major then return va.major < vb.major and -1 or 1 end
+    if va.minor ~= vb.minor then return va.minor < vb.minor and -1 or 1 end
+    if va.patch ~= vb.patch then return va.patch < vb.patch and -1 or 1 end
+    if not va.prerelease and not vb.prerelease then return 0 end
+    if not va.prerelease then return 1 end
+    if not vb.prerelease then return -1 end
+    return compare_prerelease(va.prerelease, vb.prerelease)
+end
 function check_dashboard_update()
     resolve_proxy()
     local time_str = os.date("%Y-%m-%d %H:%M:%S")
@@ -852,7 +1072,7 @@ function check_dashboard_update()
     end
     util.exec("echo '  result: latest = " .. ver .. "' >> " .. EXEC_LOG)
     util.exec("echo '=== check done ===' >> " .. EXEC_LOG)
-    local cmp = semver_compare(get_installed_version(), ver)
+    local cmp = compareSemVer(get_installed_version(), ver)
     local need = (cmp and cmp < 0) or false
     http.prepare_content("application/json")
     http.write_json({
@@ -878,9 +1098,33 @@ function do_upgrade_dashboard()
     add("TMPDIR='" .. tmpdir .. "'")
     add("BASE='https://raw.githubusercontent.com/" .. DASH_REPO .. "/" .. DASH_BRANCH .. "/'")
     add("PRIMARY_PROXY='" .. PRIMARY_PROXY .. "'")
+    add("PROXY_MODE='" .. PRIMARY_MODE .. "'")
+    add("PROXY_ADDR='" .. PRIMARY_ADDR .. "'")
     add("PROXY_CANDIDATES='" .. candidates_str .. "'")
     add("LOG='" .. EXEC_LOG .. "'")
     add("CHECKSUMS=\"$TMPDIR/checksums.sha256\"")
+    add("")
+    add([==[
+# ── 统一网络出口：mirror=前缀拼接 / proxy=curl -x / direct=原样（URL 必须是第 1 个参数）──
+norm_mirror() { case "$1" in */) printf '%s' "$1" ;; *) printf '%s/' "$1" ;; esac; }
+dl_curl() {
+  dc_spec="$1"; dc_url="$2"; shift 2
+  case "$dc_spec" in
+    ""|direct)  curl "$@" "$dc_url" ;;
+    proxy\|*)   curl -x "${dc_spec#proxy|}" "$@" "$dc_url" ;;
+    mirror\|*)  curl "$@" "$(norm_mirror "${dc_spec#mirror|}")$dc_url" ;;
+    *)          curl "$@" "$(norm_mirror "$dc_spec")$dc_url" ;;
+  esac
+}
+dl_disp() {
+  case "$1" in
+    ""|direct)  printf '%s' "$2" ;;
+    proxy\|*)   printf '%s (proxy %s)' "$2" "${1#proxy|}" ;;
+    mirror\|*)  printf '%s' "$(norm_mirror "${1#mirror|}")$2" ;;
+    *)          printf '%s' "$(norm_mirror "$1")$2" ;;
+  esac
+}
+]==])
     add("")
     add("mkdir -p \"$TMPDIR\"")
     add("cleanup() { rm -rf \"$TMPDIR\" 2>/dev/null; rm -f \"${TMPDIR}_runner.sh\" 2>/dev/null; }")
@@ -941,17 +1185,14 @@ function do_upgrade_dashboard()
     add("  d_src=\"$1\"; d_out=\"$2\"")
     add("  mkdir -p \"$(dirname \"$d_out\")\"")  -- 确保目标目录存在，避免 curl (23) write error / Ensure target dir exists to avoid curl (23) write error
     add("  d_rel=\"${BASE}${d_src}\"")
-    add("  norm_proxy() { case \"$1\" in */) echo \"$1\"; *) echo \"$1/\";; esac; }")
-    add("  if [ -n \"$PRIMARY_PROXY\" ]; then")
-    add("    d_url=\"$(norm_proxy \"$PRIMARY_PROXY\")${d_rel}\"")
-    add("    echo \"   try: $d_url\" >> \"$LOG\"")
-    add("    if curl -m 30 -fsSL -o \"$d_out\" \"$d_url\" 2>>\"$LOG\" && [ -s \"$d_out\" ]; then echo \"   ok: $d_src\" >> \"$LOG\"; return 0; fi")
-    add("    echo \"   [download failed] proxy '$PRIMARY_PROXY' unreachable: $d_src\" >> \"$LOG\"")
+    add("  if [ -n \"$PROXY_ADDR\" ]; then")
+    add("    echo \"   try: $(dl_disp \"$PRIMARY_PROXY\" \"$d_rel\")\" >> \"$LOG\"")
+    add("    if dl_curl \"$PRIMARY_PROXY\" \"$d_rel\" -m 30 -fsSL -o \"$d_out\" 2>>\"$LOG\" && [ -s \"$d_out\" ]; then echo \"   ok: $d_src\" >> \"$LOG\"; return 0; fi")
+    add("    echo \"   [download failed] selected connection ($PROXY_MODE $PROXY_ADDR) unreachable: $d_src\" >> \"$LOG\"")
     add("    return 1")
     add("  fi")
-    add("  d_url=\"$d_rel\"")
-    add("  echo \"   try: $d_url\" >> \"$LOG\"")
-    add("  if curl -m 30 -fsSL -o \"$d_out\" \"$d_url\" 2>>\"$LOG\" && [ -s \"$d_out\" ]; then echo \"   ok: $d_src\" >> \"$LOG\"; return 0; fi")
+    add("  echo \"   try: $d_rel\" >> \"$LOG\"")
+    add("  if dl_curl \"\" \"$d_rel\" -m 30 -fsSL -o \"$d_out\" 2>>\"$LOG\" && [ -s \"$d_out\" ]; then echo \"   ok: $d_src\" >> \"$LOG\"; return 0; fi")
     add("  echo \"   [download failed] direct unreachable: $d_src\" >> \"$LOG\"")
     add("  return 1")
     add("}")

@@ -49,4 +49,49 @@ python3 tools/po2lmo.py files/luci/i18n/adguardhome.zh-cn.po files/luci/i18n/adg
 4. 在 `manifest.json` 中按语义化版本 bump `version` 字段。**版本号是单一数据源**：路由器上的 `adguardhome.lua` 会在运行时读取本地部署的 `/usr/share/adguardhome-dashboard/manifest.json` 获取已安装版本（不再依赖写死的 `DASHBOARD_VERSION` 常量，该常量仅作为「本地 manifest 缺失」时的兜底）。因此发版**只需改 manifest.json 一个数字**，无需手动同步 lua 常量。
 5. `git add files/ checksums.sha256 manifest.json && git commit -m "bump dashboard to x.y.z" && git push origin main`
 
-推到 main 后，所有路由器上点「检查面板更新」即可看到新版本并在线升级。
+   推到 main 后，所有路由器上点「检查面板更新」即可看到新版本并在线升级。
+
+6. 打 tag 并推送，同时发布离线安装包资产：
+
+   ```sh
+   git tag vX.Y.Z && git push origin vX.Y.Z
+   ```
+
+   `.github/workflows/release.yml` 会检出该 tag、重跑一次 `sha256sum -c checksums.sha256`、用 `scripts/make_package.sh` 生成压缩包，并作为资产附到 GitHub Release。
+
+   > **tag 版本号必须与 `manifest.json` 一致。** 面板读取已部署的 `manifest.json` 来获知「已安装版本」，两者不一致会导致「检查面板更新」拿错数字比对。
+
+---
+
+## 4. 离线安装包
+
+`scripts/make_package.sh` 生成**完全不需联网**即可安装的自包含压缩包：
+
+```sh
+sh scripts/make_package.sh      # -> dist/luci-app-adguardhome-dashboard-vX.Y.Z.tar.gz
+```
+
+包结构（刻意与仓库保持一致，从而直接复用 `install.sh` 已有的「使用本地文件安装」分支，不需要另外维护一套离线安装器）：
+
+```
+luci-app-adguardhome-dashboard-vX.Y.Z/
+├── files/…                 # 可部署文件
+├── scripts/install.sh      # SCRIPT_DIR=<pkg>/scripts
+├── scripts/uninstall.sh
+├── manifest.json           # PROJECT_ROOT=<pkg>
+├── checksums.sha256        # 打包前会先与 files/ 校验一遍
+├── OFFLINE_PACKAGE         # 标记：让 install.sh 跳过所有联网动作
+├── INSTALL.md
+└── AdGuardHome_linux_<arch>.tar.gz   # 可选，由用户自行放入（本包从不携带）
+```
+
+因为 `SCRIPT_DIR` 解析为 `<pkg>/scripts`，于是 `PROJECT_ROOT=<pkg>`、`LOCAL_FILES=<pkg>/files` —— 正好命中已有的本地文件分支。
+
+存在 `OFFLINE_PACKAGE`（或传入 `-l`）时的关键行为：
+
+- 不做出口 IP 探测、不做连接测试、不查在线版本；校验失败时也不重新联网下载，而是与包内 `checksums.sha256` 比对不一致即中止。
+- **既不随包携带、也不联网下载** AdGuard Home 核心。`install.sh` 会扫描发布包目录及其上一级，查找 `AdGuardHome_linux_<arch>.tar.gz`；命中本机架构时解压到 `/opt/AdGuardHome` 并通过 `./AdGuardHome -s install` 注册服务 —— 全程仍然离线。没有匹配的包（或架构不符）时降级为只装面板，并明确提示需要获取哪个架构。这里必须显式跳过在线路径：`curl … | sh` 的退出码取自 `sh`，curl 失败喂进去的是空输入，会被误判成「安装成功」。
+- 架构映射与 AdGuard Home 官方 `install.sh` 一致（`uname -m` → `amd64` / `arm64` / `armv7` / `armv5` / `mipsle_softfloat` 等）。MIPS 的端序判定用 `hexdump` —— OpenWrt 自带 `hexdump`，而没有 `od`。
+- 解压后会执行 `<bin> --version` 自检，失败即回滚，因此「文件名对、内容错」的包不可能注册出一个坏服务。覆盖安装的判据是**目录**（`/opt/AdGuardHome`）而非二进制，残留目录同样会被清理。
+- 动手写任何东西之前先检测已有安装 —— 核心与面板都是如此，在线与离线一致。面板选择「跳过」时干净退出，不做任何改动。
+- 若 `files/` 缺失，直接报错退出，不会退化为联网下载。

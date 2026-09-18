@@ -50,13 +50,14 @@ var _EN = {
     '获取日志失败': 'Failed to get logs',
     '未知': 'Unknown',
     '服务未启动': 'Service not started',
+    '暂无状态': 'No status',
     '当前控制模式：': 'Control mode: ',
     'Init.d 系统服务级调用': 'Init.d System Service',
     'AdGuardHome 二进制直接控制（命令保底）': 'Binary Direct Control (Fallback)',
     '当前 AdGuardHome 版本：': 'Current AdGuardHome Version: ',
     'AdGuardHome 最新版本：': 'AdGuardHome Latest Version: ',
+    '仅支持稳定版（stable）渠道升级；不会切换到 beta/edge 渠道。': 'Stable (release) channel upgrade only — this panel does not switch to or pull from beta/edge channels.',
     '✔ 已下载': '✔ Installed',
-    '✖ 未发现程序 (请运行官网命令安装)': '✖ Not found (Run official install command)',
     '✖ 未安装': '✖ Not installed',
     '下载安装': 'Download & Install',
     '下载安装 AdGuard Home': 'Download & Install AdGuard Home',
@@ -65,14 +66,12 @@ var _EN = {
     '安装任务已启动，请在下方日志查看器中查看进度': 'Install task started, check progress in the log viewer below',
     '安装任务启动失败': 'Install task failed to start',
     '✔ 已安装系统服务 | ✔ 开机自启已注册': '✔ System service installed | ✔ Auto-start registered',
-    '⚠️ 未注册服务 (使用二进制保底控制)': '⚠ Not registered (Using binary fallback)',
     '● 正在运行': '● Running',
     '■ 已停止': '■ Stopped',
     'AdGuardHome 已是最新版本': 'AdGuardHome is up to date',
     '网络代理': 'Network Proxy',
     '切换代理后将实时生效，用于核心与面板的检查/升级请求': 'Selected proxy applies immediately for all update & upgrade requests',
     '直连 (Direct)': 'Direct',
-    '自定义': 'Custom',
     '测试': 'Test',
     '测试所有': 'Test All',
     '测试中...': 'Testing...',
@@ -92,8 +91,6 @@ var _EN = {
     '确认升级面板': 'Confirm Dashboard Upgrade',
     '将从 GitHub 下载并部署最新版面板文件。期间 LuCI 会短暂重启。': 'Will download and deploy the latest dashboard files from GitHub. LuCI will briefly restart.',
     '面板升级任务启动失败': 'Dashboard upgrade failed to start',
-    '面板升级完成，正在刷新页面': 'Dashboard upgrade completed, refreshing page',
-    '面板升级失败，已自动回滚；请检查日志与代理设置': 'Dashboard upgrade failed and auto-rolled back; please check logs and proxy settings',
     '升级失败，已自动回滚；请检查日志与代理设置': 'Upgrade failed and auto-rolled back; please check logs and proxy settings',
     '备份管理': 'Backup Management',
     '刷新备份': 'Refresh Backups',
@@ -124,11 +121,29 @@ var _EN = {
     '提示：也可点击「恢复」让面板自动后台执行': 'Tip: Or click "Restore" to let dashboard run it in background',
     '确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。': 'Confirm restore from backup? Current files will be overwritten, page will refresh after restore.',
     '恢复中，请稍候...': 'Restoring, please wait...',
-    '恢复失败，请查看日志': 'Restore failed, please check logs',
     '恢复失败': 'Restore failed',
     '确定删除此备份吗？此操作不可撤销。': 'Confirm delete this backup? This action cannot be undone.',
     '删除失败': 'Delete failed',
-    '网络错误': 'Network error'
+    '网络错误': 'Network error',
+    '网络出口检测': 'Network Egress Detection',
+    '检测中...': 'Detecting...',
+    '重新检测': 'Re-detect',
+    '中国': 'China',
+    '境外': 'Outside CN',
+    '地区未知': 'region unknown',
+    '网络出口：': 'Network egress: ',
+    '未能检测网络出口 IP（可能网络受限）': 'Could not detect network egress IP (network may be restricted)',
+    '检测到位于中国大陆，直连 GitHub 可能受限，建议使用代理节点': 'Detected in mainland China — direct GitHub may be blocked; a proxy node is recommended',
+    '检测到位于境外，直连通常可用，代理为可选项': 'Detected outside mainland China — direct connection usually works; proxy is optional',
+    '未能确定地区，如直连失败请手动选择代理': 'Region undetermined — pick a proxy manually if direct fails',
+    '预置镜像（仅中国大陆）已隐藏；如需代理请在下方自定义项填写': 'Preset mirrors (mainland China only) hidden; use the custom fields below if you need a proxy',
+    '适用于中国大陆': 'Mainland China only',
+    '自定义镜像源': 'Custom mirror',
+    '自定义代理服务器': 'Custom proxy server',
+    '已自动回退到「直连」：原先选中的镜像仅在中国大陆有效': 'Automatically fell back to Direct: the selected mirror only works in mainland China',
+    '自定义的镜像源同样通常仅在中国大陆有效': 'Custom mirrors are likewise usually mainland-China only',
+    '镜像源：把 GitHub 地址拼在其前缀后（仅中国大陆通常有效）': 'Mirror: GitHub URLs are prefixed with it (usually mainland China only)',
+    '全量代理：形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080（任意地区可用）': 'Full proxy: e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080 (works anywhere)'
 };
 
 var _ZH_CACHE = null;  // _isChinese 结果缓存，页面生命周期内不用重复检测 / cache _isChinese result; no re-detect within page lifetime
@@ -208,8 +223,10 @@ return view.extend({
     proxyGroup: 'agh_proxy_' + (Math.floor(Math.random() * 1e9)),
     proxyLatencyEls: null,
     proxyRadioEls: null,
-    proxyCustomInput: null,
-    proxyCustomRadio: null,
+    proxyCustomMirrorInput: null,
+    proxyCustomMirrorRadio: null,
+    proxyCustomProxyInput: null,
+    proxyCustomProxyRadio: null,
     proxyGlobalTestBtn: null,
     proxyBusy: false,
 
@@ -474,61 +491,89 @@ return view.extend({
         }, T('强制重装核心'));
         this.forceBtn = forceBtn;
 
-        /* ── Network proxy control ── */
+        /* ── Network proxy control ──
+         * 两种手动输入，语义完全不同，必须分开（无法靠猜）：
+         *   mirror|<prefix>  镜像源：把 GitHub 地址拼到前缀之后（**仅中国大陆通常有效**）
+         *   proxy|<addr>     全量代理服务器：curl -x，URL 不变（类似系统代理，任意地区可用）
+         * 把代理地址当镜像前缀用会拼出 http://127.0.0.1:7890/https://... 这种必然失败的 URL。
+         * Two distinct manual inputs — a mirror is a URL PREFIX, a full proxy is a curl -x target.
+         * They are not interchangeable: passing a proxy address as a prefix yields an invalid URL. */
         var proxyBuiltins = [
-            { value: '',                    label: T('直连 (Direct)'), short: 'Direct' },
-            { value: 'https://ghfast.top/',   label: 'ghfast.top',       short: 'ghfast.top' },
-            { value: 'https://gh-proxy.com/', label: 'gh-proxy.com',     short: 'gh-proxy.com' },
-            { value: 'https://kkgithub.com/', label: 'kkgithub.com',     short: 'kkgithub.com' }
+            { value: '',                             label: T('直连 (Direct)'), short: 'Direct' },
+            { value: 'mirror|https://ghfast.top/',   label: 'ghfast.top',       short: 'ghfast.top',   cnOnly: true },
+            { value: 'mirror|https://gh-proxy.com/', label: 'gh-proxy.com',     short: 'gh-proxy.com', cnOnly: true }
         ];
         var proxyRadioEls = [];
         var proxyLatencyEls = {};
+        var proxyMirrorRows = [];
         var groupName = this.proxyGroup;
 
-        function makeProxyRow(item, isCustom) {
-            var radioEl = E('input', { type: 'radio', name: groupName, value: item.value, 'data-proxy': item.value, 'data-custom': isCustom ? '1' : '0' });
+        function makeProxyRow(item, customKind) {
+            var key = customKind ? ('__custom_' + customKind + '__') : item.value;
+            var radioEl = E('input', { type: 'radio', name: groupName, value: key, 'data-proxy': key, 'data-custom': customKind ? '1' : '0' });
             var latencyEl = E('span', { style: 'font-size:12px; font-weight:bold; margin-left:8px; white-space:nowrap' }, '');
             var testBtn = E('button', {
                 class: 'btn cbi-button cbi-button-action',
                 style: 'margin-left:8px; padding:2px 8px; font-size:12px'
             }, T('测试'));
             var row;
-            if (isCustom) {
+            if (customKind) {
+                var placeholder = (customKind === 'proxy') ? 'http://127.0.0.1:7890' : 'https://your-mirror.example.com/';
                 var customInput = E('input', {
                     type: 'text',
                     class: 'cbi-input-text',
-                    placeholder: 'https://your-proxy.example.com/',
+                    placeholder: placeholder,
                     style: 'margin-left:8px; min-width:260px; vertical-align:middle'
                 });
+                radioEl.id = groupName + '_custom_' + customKind;
                 row = E('div', { style: 'display:flex; flex-wrap:wrap; align-items:center; padding:4px 0;' }, [
                     radioEl,
-                    E('label', { 'for': groupName + '_custom', style: 'margin-left:4px; margin-right:0' }, T('自定义')),
+                    E('label', { 'for': radioEl.id, style: 'margin-left:4px; margin-right:0; min-width:150px; display:inline-block' },
+                        (customKind === 'proxy') ? T('自定义代理服务器') : T('自定义镜像源')),
                     customInput, testBtn, latencyEl
                 ]);
-                radioEl.id = groupName + '_custom';
                 radioEl._customInput = customInput;
                 customInput._radioEl = radioEl;
-                proxyRadioEls.push({ proxy: '__custom__', radioEl: radioEl, testBtn: testBtn, latencyEl: latencyEl, customInput: customInput });
-                proxyLatencyEls['__custom__'] = latencyEl;
-                self.proxyCustomInput = customInput;
-                self.proxyCustomRadio = radioEl;
+                proxyRadioEls.push({ proxy: key, radioEl: radioEl, testBtn: testBtn, latencyEl: latencyEl, customInput: customInput, customKind: customKind, row: row });
+                proxyLatencyEls[key] = latencyEl;
+                if (customKind === 'proxy') {
+                    self.proxyCustomProxyInput = customInput;
+                    self.proxyCustomProxyRadio = radioEl;
+                } else {
+                    self.proxyCustomMirrorInput = customInput;
+                    self.proxyCustomMirrorRadio = radioEl;
+                }
             } else {
-                row = E('div', { style: 'display:flex; flex-wrap:wrap; align-items:center; padding:4px 0;' }, [
+                var cells = [
                     radioEl,
-                    E('label', { style: 'margin-left:4px; margin-right:0; min-width:140px; display:inline-block' }, item.label),
-                    testBtn, latencyEl
-                ]);
-                proxyRadioEls.push({ proxy: item.value, radioEl: radioEl, testBtn: testBtn, latencyEl: latencyEl });
+                    E('label', { style: 'margin-left:4px; margin-right:0; min-width:150px; display:inline-block' }, item.label)
+                ];
+                /* 预置镜像只在中国大陆有效 → 显式标注，避免境外用户误选 / preset mirrors are CN-only: label them */
+                if (item.cnOnly) {
+                    cells.push(E('span', {
+                        style: 'font-size:11px; padding:1px 6px; margin-right:6px; border-radius:3px; background:rgba(231,76,60,0.12); color:#e74c3c; white-space:nowrap; vertical-align:middle'
+                    }, T('适用于中国大陆')));
+                }
+                cells.push(testBtn);
+                cells.push(latencyEl);
+                row = E('div', { style: 'display:flex; flex-wrap:wrap; align-items:center; padding:4px 0;' }, cells);
+                row._proxyValue = item.value;
+                proxyRadioEls.push({ proxy: item.value, radioEl: radioEl, testBtn: testBtn, latencyEl: latencyEl, row: row });
                 proxyLatencyEls[item.value] = latencyEl;
+                /* 预置镜像行（非直连）：境外由地区策略收起，但两个「自定义」输入框始终保留
+                 * Preset mirror rows: collapsed outside CN, while both custom inputs always stay. */
+                if (item.cnOnly) { proxyMirrorRows.push(row); }
             }
             return row;
         }
 
         var proxyRows = [];
-        for (var i = 0; i < proxyBuiltins.length; i++) { proxyRows.push(makeProxyRow(proxyBuiltins[i], false)); }
-        proxyRows.push(makeProxyRow({ value: '', label: T('自定义') }, true));
+        for (var i = 0; i < proxyBuiltins.length; i++) { proxyRows.push(makeProxyRow(proxyBuiltins[i], null)); }
+        proxyRows.push(makeProxyRow({ value: '' }, 'mirror'));
+        proxyRows.push(makeProxyRow({ value: '' }, 'proxy'));
         this.proxyRadioEls = proxyRadioEls;
         this.proxyLatencyEls = proxyLatencyEls;
+        this.proxyMirrorRows = proxyMirrorRows;
 
         var proxyGlobalTestBtn = E('button', {
             class: 'btn cbi-button cbi-button-action',
@@ -536,15 +581,33 @@ return view.extend({
         }, T('测试所有'));
         this.proxyGlobalTestBtn = proxyGlobalTestBtn;
 
-        var proxyHeader = E('div', { style: 'margin-bottom:10px; font-size:12px; color:#888' },
-            T('切换代理后将实时生效，用于核心与面板的检查/升级请求')
-        );
+        var geoReBtn = E('button', {
+            class: 'btn cbi-button cbi-button-action',
+            style: 'margin-top:8px; margin-left:8px'
+        }, T('重新检测'));
+        this.geoReBtn = geoReBtn;
 
-        var proxyContainer = E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [proxyHeader]);
+        var proxyHeader = E('div', { style: 'margin-bottom:10px; font-size:12px; color:#888' }, [
+            E('div', {}, T('切换代理后将实时生效，用于核心与面板的检查/升级请求')),
+            E('div', { style: 'margin-top:3px' }, T('镜像源：把 GitHub 地址拼在其前缀后（仅中国大陆通常有效）')),
+            E('div', { style: 'margin-top:3px' }, T('全量代理：形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080（任意地区可用）'))
+        ]);
+
+        /* ── Network egress / region detection banner ── */
+        var geoBannerEl = E('div', {
+            id: 'agh-geo-banner',
+            style: 'margin-bottom:14px; padding:10px 12px; border-radius:4px; font-size:13px; line-height:1.7; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder
+        }, T('检测中...'));
+        this.geoBannerEl = geoBannerEl;
+
+        var geoSectionLabel = E('div', { style: 'font-weight:bold; font-size:13px; margin-bottom:6px' }, T('网络出口检测'));
+
+        var proxyContainer = E('div', { style: 'padding:15px; background:' + theme.panelBg + '; border:1px solid ' + theme.panelBorder + '; border-radius:4px' }, [geoSectionLabel, geoBannerEl, proxyHeader]);
         for (var pr = 0; pr < proxyRows.length; pr++) {
             proxyContainer.appendChild(proxyRows[pr]);
         }
         proxyContainer.appendChild(proxyGlobalTestBtn);
+        proxyContainer.appendChild(geoReBtn);
 
         /* ── Panel self-upgrade UI ── */
         var dashCurrVer = status.dashboard_version || T('未知');
@@ -724,7 +787,8 @@ return view.extend({
                     ]),
                     checkUpdateBtn,
                     upgradeBtn,
-                    forceBtn
+                    forceBtn,
+                    E('div', { style: 'margin-top:10px;font-size:11px;color:' + theme.mutedColor }, T('仅支持稳定版（stable）渠道升级；不会切换到 beta/edge 渠道。'))
                 ])
             ]),
 
@@ -757,6 +821,7 @@ return view.extend({
             self.checkUpdate();
             self.checkDashboardUpdate();
             self.fetchBackups();
+            self.sendGeoProbe();
             self.testProxyAll();
         }, 1000);
 
@@ -799,37 +864,111 @@ return view.extend({
     },
 
     /* ── Proxy control logic ── */
-    prefillProxy: function(proxy) {
-        if (!this.proxyRadioEls) return;
-        var builtins = ['', 'https://ghfast.top/', 'https://gh-proxy.com/', 'https://kkgithub.com/'];
-        var isBuiltin = false;
-        for (var i = 0; i < builtins.length; i++) {
-            if (builtins[i] === proxy) { isBuiltin = true; break; }
-        }
-        if (isBuiltin) {
-            for (var j = 0; j < this.proxyRadioEls.length; j++) {
-                var r = this.proxyRadioEls[j];
-                if (r.proxy === proxy) { r.radioEl.checked = true; break; }
-            }
-            if (this.proxyCustomInput) { this.proxyCustomInput.value = ''; }
-        } else {
-            if (this.proxyCustomRadio) { this.proxyCustomRadio.checked = true; }
-            if (this.proxyCustomInput) { this.proxyCustomInput.value = proxy || ''; }
+    /* 预置镜像（ghfast.top / gh-proxy.com）只在中国大陆有效：境外时收起这些行。
+     * 「直连」与两个「自定义」输入框始终保留（手动输入永远可用）。
+     * Built-in mirrors serve mainland CN only: collapse them outside CN. Direct and both custom
+     * inputs always stay visible. */
+    _setMirrorVisible: function(visible) {
+        var rows = this.proxyMirrorRows || [];
+        for (var i = 0; i < rows.length; i++) {
+            rows[i].style.display = visible ? '' : 'none';
         }
     },
 
-    getProxyByKey: function(key) {
-        if (key === '__custom__') {
-            return this.proxyCustomInput ? (this.proxyCustomInput.value || '').trim() : '';
+    /* 把输入框里的地址规范化为镜像前缀（补结尾 /）/ Normalize a typed mirror prefix (add trailing '/'). */
+    normMirrorAddr: function(v) {
+        v = (v || '').trim();
+        if (!v) return '';
+        return v.charAt(v.length - 1) === '/' ? v : v + '/';
+    },
+
+    /* UI 键 → wire 规格（'' = 直连）。预置项的键本身即规格。
+     * UI key -> wire spec ('' = direct). Preset keys are already specs. */
+    specOfKey: function(key) {
+        if (key === '__custom_mirror__') {
+            var mv = this.proxyCustomMirrorInput ? (this.proxyCustomMirrorInput.value || '').trim() : '';
+            return mv ? ('mirror|' + this.normMirrorAddr(mv)) : '';
+        }
+        if (key === '__custom_proxy__') {
+            var pv = this.proxyCustomProxyInput ? (this.proxyCustomProxyInput.value || '').trim() : '';
+            return pv ? ('proxy|' + pv) : '';
         }
         return key;
+    },
+
+    /* 兼容旧名 / Backwards-compatible alias. */
+    getProxyByKey: function(key) { return this.specOfKey(key); },
+
+    /* 境外 + 当前选中的是「镜像」类型 → 自动回退到直连（并持久化），同时收起预置镜像行。
+     * 返回 true 表示发生了回退（调用方据此在横幅上明示，而不是静默生效一个看不见的代理）。
+     * Outside CN with a MIRROR selected: fall back to Direct (persisted) and collapse the preset
+     * mirror rows. Returns true when a fallback happened, so the banner can say so explicitly. */
+    _syncRegionPolicy: function() {
+        var hide = !!(this.geoData && this.geoData.is_cn === false);
+        this._setMirrorVisible(!hide);
+        if (!hide) return false;
+        var sel = this.getSelectedProxy();
+        var m = sel.match(/^(mirror|proxy)\|(.*)$/);
+        var isMirror = m ? (m[1] === 'mirror' && m[2] !== '') : (sel !== '');
+        if (!isMirror) return false;
+        for (var i = 0; i < (this.proxyRadioEls || []).length; i++) {
+            if (this.proxyRadioEls[i].proxy === '') { this.proxyRadioEls[i].radioEl.checked = true; break; }
+        }
+        if (this.proxyCustomMirrorInput) { this.proxyCustomMirrorInput.value = ''; }
+        if (this.statusData) { this.statusData.proxy = ''; }
+        this.sendSetProxy('').catch(function() {});
+        return true;
+    },
+
+    prefillProxy: function(proxy) {
+        if (!this.proxyRadioEls) return;
+        var spec = (proxy === null || proxy === undefined) ? '' : String(proxy);
+        var mode = 'mirror', addr = '';
+        var m = spec.match(/^(mirror|proxy)\|(.*)$/);
+        if (m) { mode = m[1]; addr = m[2]; }
+        else { addr = spec; }   /* 旧版格式：裸值 = 镜像前缀 / legacy: a bare value is a mirror prefix */
+
+        var candidates;
+        if (addr === '') { candidates = ['']; }
+        else if (mode === 'mirror') { candidates = ['mirror|' + addr, 'mirror|' + this.normMirrorAddr(addr), addr]; }
+        else { candidates = ['proxy|' + addr, addr]; }
+
+        var matched = null;
+        for (var i = 0; i < this.proxyRadioEls.length && !matched; i++) {
+            var r = this.proxyRadioEls[i];
+            for (var k = 0; k < candidates.length; k++) {
+                if (r.proxy === candidates[k]) { matched = r; break; }
+            }
+        }
+        if (this.proxyCustomMirrorInput) { this.proxyCustomMirrorInput.value = ''; }
+        if (this.proxyCustomProxyInput) { this.proxyCustomProxyInput.value = ''; }
+
+        if (matched) {
+            matched.radioEl.checked = true;
+        } else if (addr !== '') {
+            /* 自定义项：按类型回填到对应输入框 / custom: refill the input that matches the type */
+            if (mode === 'proxy' && this.proxyCustomProxyInput) {
+                this.proxyCustomProxyInput.value = addr;
+                if (this.proxyCustomProxyRadio) { this.proxyCustomProxyRadio.checked = true; }
+            } else if (this.proxyCustomMirrorInput) {
+                this.proxyCustomMirrorInput.value = addr;
+                if (this.proxyCustomMirrorRadio) { this.proxyCustomMirrorRadio.checked = true; }
+            }
+        } else {
+            for (var q = 0; q < this.proxyRadioEls.length; q++) {
+                if (this.proxyRadioEls[q].proxy === '') { this.proxyRadioEls[q].radioEl.checked = true; break; }
+            }
+        }
+        /* 地区已探明时同步地区策略（prefill 可能晚于 geo 执行）/ Re-apply the region policy
+         * in case prefill runs after the geo probe. */
+        this._syncRegionPolicy();
     },
 
     getSelectedProxy: function() {
         if (!this.proxyRadioEls) return '';
         for (var i = 0; i < this.proxyRadioEls.length; i++) {
             var r = this.proxyRadioEls[i];
-            if (r.radioEl && r.radioEl.checked) return this.getProxyByKey(r.proxy);
+            if (r.radioEl && r.radioEl.checked) return this.specOfKey(r.proxy);
         }
         return '';
     },
@@ -857,24 +996,31 @@ return view.extend({
         }
 
         /* 修复死循环点：改用 input 事件，且绝对不上锁/不触发 focus 递归级联 / Fix infinite-loop point: use the input event instead, and never lock / never trigger focus recursion cascade */
-        if (this.proxyCustomInput) {
-            var inp = this.proxyCustomInput;
-            inp.addEventListener('input', function() {
-                if (self.proxyCustomRadio && !self.proxyCustomRadio.checked) {
-                    self.proxyCustomRadio.checked = true;
-                }
-            });
-            /* 自定义代理输入提交（失焦/回车）后即时持久化，确保 reload 后仍在 / Persist the custom proxy on commit (blur/Enter) so it survives a page reload */
-            inp.addEventListener('change', function() {
-                if (self.proxyCustomRadio) self.proxyCustomRadio.checked = true;
-                var v = (inp.value || '').trim();
-                self.sendSetProxy(v).then(function(d) {
-                    if (d && d.success && self.statusData) self.statusData.proxy = v;
-                }).catch(function() {});
-            });
-            inp.addEventListener('keydown', function(e) {
-                if (e.key === 'Enter' || e.keyCode === 13) { inp.blur(); }
-            });
+        var customInputs = [
+            { input: this.proxyCustomMirrorInput, radio: this.proxyCustomMirrorRadio },
+            { input: this.proxyCustomProxyInput,  radio: this.proxyCustomProxyRadio }
+        ];
+        for (var ci = 0; ci < customInputs.length; ci++) {
+            (function(c) {
+                var inp = c.input;
+                if (!inp) return;
+                inp.addEventListener('input', function() {
+                    if (c.radio && !c.radio.checked) { c.radio.checked = true; }
+                });
+                /* 自定义项提交（失焦/回车）后即时持久化；注意写入的是带类型的完整规格
+                 * （mirror|<prefix> / proxy|<addr>），不是裸地址 / Persist the full TYPED spec on
+                 * commit (blur/Enter) — not the bare address. */
+                inp.addEventListener('change', function() {
+                    if (c.radio) c.radio.checked = true;
+                    var v = self.specOfKey(c.radio ? c.radio.value : '');
+                    self.sendSetProxy(v).then(function(d) {
+                        if (d && d.success && self.statusData) self.statusData.proxy = v;
+                    }).catch(function() {});
+                });
+                inp.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' || e.keyCode === 13) { inp.blur(); }
+                });
+            })(customInputs[ci]);
         }
 
         if (this.proxyGlobalTestBtn) {
@@ -882,6 +1028,14 @@ return view.extend({
                 e.preventDefault();
                 e.stopPropagation();
                 self.testProxyAll();
+            });
+        }
+
+        if (this.geoReBtn) {
+            this.geoReBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                self.sendGeoProbe();
             });
         }
     },
@@ -893,9 +1047,10 @@ return view.extend({
 
     testProxyOne: function(key) {
         var self = this;
-        var proxy = this.getProxyByKey(key);
+        var proxy = this.specOfKey(key);
+        var isCustom = (key === '__custom_mirror__' || key === '__custom_proxy__');
 
-        if (key === '__custom__' && !proxy) {
+        if (isCustom && !proxy) {
             self._setLatency(key, T('地址不能为空'), '#e74c3c');
             return Promise.resolve();
         }
@@ -924,7 +1079,10 @@ return view.extend({
             this.proxyGlobalTestBtn.textContent = T('测试中...');
         }
 
-        var items = this.proxyRadioEls || [];
+        /* 跳过已收起的行：境外时预置镜像被收起，不再测试（省时也避免误报） / Skip collapsed rows */
+        var items = (this.proxyRadioEls || []).filter(function(r) {
+            return !r.row || r.row.style.display !== 'none';
+        });
         /* 串行：对性能弱的路由器更友好（避免同时 5 个 curl 阻塞 Lua 进程） / Serial: friendlier to weak routers (avoid 5 concurrent curls blocking the Lua process) */
         (function run(i) {
             if (i >= items.length) {
@@ -939,6 +1097,69 @@ return view.extend({
                 run(i + 1);
             });
         })(0);
+    },
+
+    /* ── Network egress / region detection ── */
+    sendGeoProbe: function() {
+        var self = this;
+        if (this.geoBannerEl) { this.geoBannerEl.textContent = T('检测中...'); }
+        var url = L.url('admin/services/adguardhome/geo_probe');
+        return request.get(url).then(function(res) {
+            self.renderGeo(res);
+            self.geoData = res;
+        }).catch(function() {
+            self.renderGeo({ ok: false });
+        });
+    },
+
+    renderGeo: function(data) {
+        this.geoData = data || null;
+        var el = this.geoBannerEl;
+        if (!el) return;
+        var theme = _themeStyles();
+        var bg, border, color, main, hint;
+        if (!data || !data.ok || !data.ip) {
+            main = T('未能检测网络出口 IP（可能网络受限）');
+            hint = T('未能确定地区，如直连失败请手动选择代理');
+            bg = theme.panelBg; border = theme.panelBorder; color = theme.mutedColor;
+        } else if (data.is_cn === true) {
+            main = T('网络出口：') + T('中国') + ' · ' + (data.region || '') + ' ' + (data.city || '') + '（IP ' + data.ip + '）';
+            hint = T('检测到位于中国大陆，直连 GitHub 可能受限，建议使用代理节点');
+            bg = 'rgba(231,76,60,0.12)'; border = 'rgba(231,76,60,0.45)'; color = '#e74c3c';
+        } else if (data.is_cn === false) {
+            main = T('网络出口：') + (data.country || T('境外')) + ' / ' + (data.region || '') + ' ' + (data.city || '') + '（IP ' + data.ip + '）';
+            hint = T('检测到位于境外，直连通常可用，代理为可选项');
+            bg = 'rgba(45,202,115,0.12)'; border = 'rgba(45,202,115,0.45)'; color = '#2dca73';
+        } else {
+            main = T('网络出口：') + 'IP ' + data.ip + '（' + T('地区未知') + '）';
+            hint = T('未能确定地区，如直连失败请手动选择代理');
+            bg = theme.panelBg; border = theme.panelBorder; color = theme.mutedColor;
+        }
+        el.style.background = bg;
+        el.style.border = '1px solid ' + border;
+        el.style.color = color;
+
+        /* 地区策略：境外 → 收起预置镜像行；若当前选中的是镜像类型则自动回退到直连（并持久化），
+         * 回退是显式的（横幅写明），不会出现「看不见的代理仍在后台生效」。
+         * Region policy: outside CN collapse the preset mirrors, and if a MIRROR spec is currently
+         * selected fall back to Direct (persisted) — stated explicitly in the banner, never silent. */
+        var fellBack = this._syncRegionPolicy();
+
+        el.innerHTML = '';
+        el.appendChild(E('div', { style: 'font-weight:bold' }, '🌏 ' + main));
+        el.appendChild(E('div', { style: 'margin-top:4px; font-size:12px; opacity:0.92' }, hint));
+        if (fellBack) {
+            el.appendChild(E('div', { style: 'margin-top:4px; font-size:12px; font-weight:bold' },
+                T('已自动回退到「直连」：原先选中的镜像仅在中国大陆有效')
+            ));
+        } else if (data && data.is_cn === false) {
+            el.appendChild(E('div', { style: 'margin-top:4px; font-size:12px; opacity:0.92' },
+                T('预置镜像（仅中国大陆）已隐藏；如需代理请在下方自定义项填写')
+            ));
+            el.appendChild(E('div', { style: 'margin-top:2px; font-size:12px; opacity:0.92' },
+                T('自定义的镜像源同样通常仅在中国大陆有效')
+            ));
+        }
     },
 
     /* ── Panel self-upgrade logic ── */
