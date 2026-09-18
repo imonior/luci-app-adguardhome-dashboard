@@ -37,14 +37,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          # Release body is English by default: a short install hint + GitHub's
-          # auto-generated changelog link.
+          # Release body is bilingual: English first (default), Chinese after.
           NOTES=$(cat <<'EOF'
           Offline install: download the tarball below, extract it, then run
           `scripts/install.sh` — see INSTALL.md inside the package for details.
           The AdGuard Home core is never bundled; drop the official
           `AdGuardHome_linux_<arch>.tar.gz` next to the extracted folder and the
           installer picks it up automatically.
+
+          ---
+
+          离线安装：下载下方压缩包并解压，运行 `scripts/install.sh` 即可（详见包内
+          INSTALL.md）。本包不包含 AdGuard Home 核心——把官方
+          `AdGuardHome_linux_<arch>.tar.gz` 放在解压目录（或其上一级），
+          安装脚本会自动识别并安装。
           EOF
           )
           # 未匹配到时会把字面量 dist/*.tar.gz 传给 gh 并报错，正好起到断言作用。
