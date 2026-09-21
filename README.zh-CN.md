@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.8**
+**v2.5.9**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -366,6 +366,13 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.5.9**
+  - **修复面板自升级「点了没反应」**（即「检测到新版、但日志空白且未升级」）：生成的升级脚本 stderr 原先落在 HTTP 连接上、随连接一起丢弃，导致任何解析/启动失败都毫无痕迹。现在两个生成脚本（核心升级 + 面板升级）都把 stderr 并入执行日志，面板也改为检查 RPC 的 `success` 字段而非只看 HTTP 200——启动失败会弹出真实错误提示，不再假报「升级已启动」
+  - **防旧视图自修复**：视图 JS 现在内嵌 `DASHBOARD_VIEW_VERSION`，渲染时与服务端下发版本比对；不一致即说明浏览器在跑缓存的旧视图（LuCI 的 view 模块按 URL 缓存在 localStorage / HTTP 缓存中——这正是升级 + 刷新后界面仍残留旧内容的原因），面板会自动清除这些缓存视图项并硬重载一次（sessionStorage 防重载死循环）。此后升级无需再手动清浏览器存储
+  - **出口 IP / 地区探测更健壮**：geo 探测端点由 4 个增至 10 个（新增 ipapi.co、api.myip.com、extreme-ip-lookup.com、checkip.amazonaws.com、ifconfig.me、icanhazip.com 及纯 IP 服务），每个端点重试 1 次，单次 `--connect-timeout 4 --max-time 6`，总耗时上限 25s；返回值带上「已尝试的端点」列表，失败时界面直接显示，便于诊断
+  - **发布工具链**：新增 `scripts/release.sh` 发布编排器——一条命令完成推送前完整检查（`manifest.json` / 视图 JS 常量 / 两份 README 的版本一致性、双语变更记录条目、shell + JS + Lua 代码语法、`checksums.sha256` 指纹、`changes_package/` 同步）并构建整项目压缩包。发布工作流在构建前以 `--check --strict` 调用它，并新增 runner 侧安装 Lua（runner 镜像不含 Lua，此前导致 Lua 语法门禁静默失效）与完整历史 checkout（保证 tag / 版本交叉核对能取到 tag）
+  - 离线包现在同时附带两份 README、`LICENSE` 与 `DEVELOPMENT.md`，解压后的目录就是完整项目
 
 - **v2.5.8**
   - **离线安装包**：每个 Release 现在都附带自包含的 tar.gz（tag 推送时由 `scripts/make_package.sh` + 发布工作流自动构建）。下载、解压、运行 `scripts/install.sh` 即可；包内 `OFFLINE_PACKAGE` 标记会关闭**所有**联网动作（geo 探测、连接选择、在线版本检查、文件下载）

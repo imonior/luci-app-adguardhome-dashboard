@@ -775,7 +775,9 @@ fallback_upgrade_via_proxy() {
     f:close()
     os.execute("chmod 755 " .. scrpath)
     -- 注意：ShellRunner 脚本执行前清写 EXEC_LOG 由 shell 头部定义 / Note: the pre-exec EXEC_LOG truncation for ShellRunner is defined in the shell header
-    os.execute("sh " .. scrpath .. " 2>&1 &")
+    -- stderr 必须并入 EXEC_LOG：否则脚本的解析/启动错误随 HTTP 连接丢弃，日志毫无痕迹（v2.5.6 norm_proxy case 语法错误的教训）
+    -- stderr must land in EXEC_LOG: otherwise parse/startup errors vanish with the HTTP connection (v2.5.6 norm_proxy case-syntax lesson)
+    os.execute("sh " .. scrpath .. " >> " .. EXEC_LOG .. " 2>&1 &")
     return true
 end
 
@@ -843,22 +845,37 @@ local function _json_field(out, key)
 end
 
 -- Detect the router's egress public IP and region by querying several public geo-IP
--- services in order (each with a short timeout), stopping at the first that replies.
--- 通过依次查询多个公开 geo-IP 服务（各自短超时）检测路由器出口公网 IP 与归属地，取首个响应。
+-- services in order (each with a short timeout, retried once), stopping at the first that
+-- replies. More endpoints + retries + a hard total-time cap make the probe robust when the
+-- network is partially restricted (some geo-IP hosts blocked/unreachable).
 -- is_cn: nil = unknown (all failed / no country), true = mainland CN, false = elsewhere.
--- is_cn：nil=未知（全部失败/无国家），true=中国大陆，false=境外。
+-- 依次查询多个公开 geo-IP 服务（各自短超时、重试 1 次），取首个响应。端点更多 + 重试 + 总超时上限，
+-- 使网络部分受限（部分 geo-IP 主机不可达）时仍更可能成功。is_cn：nil=未知，true=中国大陆，false=境外。
 local GEO_APIS = {
     { url = "https://ip-api.com/json/?fields=status,message,country,countryCode,regionName,city,query", fmt = "ipapi" },
     { url = "https://ipinfo.io/json", fmt = "ipinfo" },
     { url = "https://api.ip.sb/geoip", fmt = "ipsb" },
+    { url = "https://ipapi.co/json/", fmt = "ipapico" },
+    { url = "https://api.myip.com", fmt = "myip" },
+    { url = "https://extreme-ip-lookup.com/json", fmt = "extreme" },
+    { url = "https://checkip.amazonaws.com", fmt = "iponly" },
+    { url = "https://ifconfig.me/ip", fmt = "iponly" },
+    { url = "https://icanhazip.com", fmt = "iponly" },
     { url = "https://api.ipify.org?format=json", fmt = "ipify" }
 }
 
 function geo_probe()
-    local result = { ok = false, ip = "", country = "", country_code = "", region = "", city = "", is_cn = nil, source = "" }
+    local result = { ok = false, ip = "", country = "", country_code = "", region = "", city = "", is_cn = nil, source = "", tried = {} }
+    local start = os.time()
     for _, api in ipairs(GEO_APIS) do
-        local out = util.exec("curl -m 4 -fsSL '" .. api.url .. "' 2>/dev/null") or ""
-        out = out:gsub("^%s+", ""):gsub("%s+$", "")
+        if os.difftime(os.time(), start) > 25 then break end
+        local out = ""
+        for _ = 1, 2 do
+            out = util.exec("curl -fsSL --connect-timeout 4 --max-time 6 '" .. api.url .. "' 2>/dev/null") or ""
+            out = out:gsub("^%s+", ""):gsub("%s+$", "")
+            if #out >= 5 then break end
+        end
+        table.insert(result.tried, api.url:match("^https?://([^/]+)") or api.url)
         local ip
         if #out >= 5 then
             local cc, country, region, city
@@ -880,6 +897,24 @@ function geo_probe()
                 country = _json_field(out, "country")
                 region = _json_field(out, "region")
                 city = _json_field(out, "city")
+            elseif api.fmt == "ipapico" then
+                ip = _json_field(out, "ip")
+                cc = _json_field(out, "country_code")
+                country = _json_field(out, "country_name") or _json_field(out, "country")
+                region = _json_field(out, "region")
+                city = _json_field(out, "city")
+            elseif api.fmt == "myip" then
+                ip = _json_field(out, "ip")
+                cc = _json_field(out, "country_code")
+                country = _json_field(out, "country")
+            elseif api.fmt == "extreme" then
+                ip = _json_field(out, "ip")
+                cc = _json_field(out, "countryCode")
+                country = _json_field(out, "country")
+                region = _json_field(out, "region")
+                city = _json_field(out, "city")
+            elseif api.fmt == "iponly" then
+                ip = out
             elseif api.fmt == "ipify" then
                 ip = _json_field(out, "ip")
             end
@@ -894,7 +929,7 @@ function geo_probe()
                 local is_cn = nil
                 if cc and cc:upper() == "CN" then
                     is_cn = true
-                elseif cc and #cc == 2 then
+                elseif (cc and #cc == 2) or (country and not (country:find("中国") or country:lower():find("china"))) then
                     is_cn = false
                 end
                 if country and (country:find("中国") or country:lower():find("china")) then
@@ -1326,7 +1361,9 @@ dl_disp() {
     f:write(table.concat(L, "\n"))
     f:close()
     os.execute("chmod 755 " .. scrpath)
-    os.execute("sh " .. scrpath .. " 2>&1 &")
+    -- stderr 必须并入 EXEC_LOG，否则解析/启动错误随 HTTP 连接丢弃（同 launch_core_upgrade）
+    -- stderr must land in EXEC_LOG so parse/startup errors are visible (same as launch_core_upgrade)
+    os.execute("sh " .. scrpath .. " >> " .. EXEC_LOG .. " 2>&1 &")
     http.prepare_content("application/json")
     http.write_json({ success = true })
 end

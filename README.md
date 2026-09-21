@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.8**
+**v2.5.9**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -374,6 +374,13 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.5.9**
+  - **Fixed the panel self-upgrade silently doing nothing** (the "new version detected, but the log stays empty and nothing upgrades" bug): the generated upgrade script's stderr used to land on the HTTP socket and vanish with the connection, so any parse/startup failure left no trace at all. Both generated runners (core + panel) now redirect stderr into the execution log, and the dashboard checks the RPC `success` field instead of trusting HTTP 200 — a failed launch now raises a real error notification instead of a false "upgrade started" banner
+  - **Anti-stale-view self-heal**: the view JS now embeds its own `DASHBOARD_VIEW_VERSION` and compares it with the server-reported version on render. A mismatch means the browser is executing a cached older view (LuCI caches view modules keyed by URL in localStorage / the HTTP cache — which is why a stale UI could survive a reinstall + refresh), so the dashboard clears those cached view entries and hard-reloads once (sessionStorage-guarded against loops). Upgrading no longer requires clearing browser storage by hand
+  - **More robust network egress / region detection**: the geo probe now tries 10 endpoints instead of 4 (adds ipapi.co, api.myip.com, extreme-ip-lookup.com, checkip.amazonaws.com, ifconfig.me, icanhazip.com plus plain-IP services), retries each endpoint once, uses `--connect-timeout 4 --max-time 6` per attempt with a 25s overall cap, and returns the list of endpoints tried so the UI can show them on failure
+  - **Release tooling**: new `scripts/release.sh` orchestrator — one command runs the full pre-push check (version consistency across `manifest.json` / the view JS constant / both READMEs, bilingual changelog entries, shell + JS + Lua syntax, `checksums.sha256` fingerprint, `changes_package/` sync) and then builds the whole-project tarball. The release workflow calls it as `--check --strict` before building, installs Lua on the runner (the image ships none, which had silently disabled the Lua syntax gate) and checks out full history so the tag/version cross-check can resolve the tag
+  - The offline package now also carries both READMEs, `LICENSE` and `DEVELOPMENT.md`, so the extracted directory is the complete project
 
 - **v2.5.8**
   - **Offline install package**: every release now ships a self-contained tarball (built by `scripts/make_package.sh` + the release workflow on tag push). Download, extract, run `scripts/install.sh` — the `OFFLINE_PACKAGE` marker gates **every** network touchpoint (geo probe, connection selection, online version check, file downloads)

@@ -3,6 +3,12 @@
 'require ui';
 'require request';
 
+/* 本视图 JS 的版本（与发布版本保持一致；升级时需随 manifest.json 同步 bump）。
+ * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
+ * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
+ * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
+var DASHBOARD_VIEW_VERSION = "2.5.9";
+
 /* ── Client-side translation fallback ── */
 var _EN = {
     'AdGuard Home 控制中心': 'AdGuard Home Control Center',
@@ -436,6 +442,30 @@ return view.extend({
         var status = data[0];
         var logData = data[1];
         this.statusData = status;
+
+        /* Anti-stale-view self-heal: if the server's dashboard version differs from the version of
+         * the JS currently executing, the browser is almost certainly running a cached older view
+         * (LuCI caches view modules in localStorage / HTTP cache keyed by URL — that is why an old
+         * proxy candidate or stale UI can survive a reinstall + normal refresh). Clear the cached
+         * view and force ONE hard reload so the new view loads. sessionStorage-guarded to avoid loops.
+         * 防旧视图自修复：服务端版本与正在执行的 JS 版本不一致 → 浏览器在跑缓存的旧视图（这正是升级后
+         * 旧候选残留、普通刷新清不掉的根因）。清掉缓存视图并硬重载一次；用 sessionStorage 防重载死循环。 */
+        if (status.dashboard_version && status.dashboard_version !== DASHBOARD_VIEW_VERSION) {
+            try {
+                var _rk = '__agh_view_reload_' + status.dashboard_version;
+                if (!sessionStorage.getItem(_rk)) {
+                    sessionStorage.setItem(_rk, '1');
+                    for (var _i = localStorage.length - 1; _i >= 0; _i--) {
+                        var _k = localStorage.key(_i);
+                        if (_k && (_k.indexOf('view:') === 0 || _k.indexOf('luci') === 0)) {
+                            try { localStorage.removeItem(_k); } catch (e) {}
+                        }
+                    }
+                    location.reload(true);
+                    return;
+                }
+            } catch (e) {}
+        }
 
         var isBinInstalled = !!status.installed;
         var isServiceInstalled = !!status.service_installed;
@@ -1119,8 +1149,9 @@ return view.extend({
         var theme = _themeStyles();
         var bg, border, color, main, hint;
         if (!data || !data.ok || !data.ip) {
+            var _tried = (data && data.tried && data.tried.length) ? data.tried.join(', ') : '';
             main = T('未能检测网络出口 IP（可能网络受限）');
-            hint = T('未能确定地区，如直连失败请手动选择代理');
+            hint = T('未能确定地区，如直连失败请手动选择代理') + (_tried ? ('（已尝试：' + _tried + '）') : '');
             bg = theme.panelBg; border = theme.panelBorder; color = theme.mutedColor;
         } else if (data.is_cn === true) {
             main = T('网络出口：') + T('中国') + ' · ' + (data.region || '') + ' ' + (data.city || '') + '（IP ' + data.ip + '）';
@@ -1207,9 +1238,15 @@ return view.extend({
                 E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
                 E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
                     ui.hideModal();
-                    self.sendDashboardUpgrade().then(function() {
-                        ui.addNotification(null, T('升级面板任务已启动，请在下方日志查看器中查看进度'), 'info');
-                        self.startDashboardPolling();
+                    self.sendDashboardUpgrade().then(function(res) {
+                        /* 必须检查 success 字段：HTTP 200 不代表任务已启动（如 runner 写入失败返回 success:false）。
+                           Must check the success field: HTTP 200 does not mean the task started (e.g. runner write failure returns success:false). */
+                        if (res && res.success) {
+                            ui.addNotification(null, T('升级面板任务已启动，请在下方日志查看器中查看进度'), 'info');
+                            self.startDashboardPolling();
+                        } else {
+                            ui.addNotification(null, T('面板升级任务启动失败') + (res && res.error ? (': ' + res.error) : ''), 'error');
+                        }
                     }).catch(function() {
                         ui.addNotification(null, T('面板升级任务启动失败'), 'error');
                     });

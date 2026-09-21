@@ -6,8 +6,10 @@ name: Release
 #   git tag v2.5.7 && git push origin v2.5.7
 #
 # The tarball is built from the checked-out tag, so its content always matches
-# the tag — and scripts/make_package.sh aborts if files/ disagrees with
-# checksums.sha256, which makes a stale manifest fail the release loudly.
+# the tag — and scripts/release.sh --check --strict aborts the release on any
+# mandatory failure (version mismatch, missing bilingual changelog, code syntax
+# error, or files/ disagreeing with checksums.sha256), so a stale/incorrect
+# release fails loudly before the asset is ever built.
 
 on:
   push:
@@ -22,12 +24,36 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # 完整历史：release.sh 会用 git describe --exact-match --tags 交叉核对
+          # tag 与 manifest 版本，浅克隆下可能取不到 tag。
+          # Full history so the tag/version cross-check inside release.sh works.
+          fetch-depth: 0
 
-      - name: Sanity check the content-fingerprint manifest
+      - name: Install Lua (required by the Lua syntax gate)
         run: |
-          # 与 install.sh 的校验口径一致：任何与发布清单不符的内容都必须让发版失败。
-          # Same check the installer performs; a stale/incorrect manifest must fail here.
-          sha256sum -c checksums.sha256
+          # runner 镜像不含 lua/luajit；Lua 语法是本项目历史 P0 高发区，
+          # 缺校验器就等于门禁静默失效（release.sh --strict 会因此直接失败）。
+          # The runner image ships no lua/luajit. release.sh --strict now fails when
+          # the checker is missing, so install it explicitly.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lua5.4
+          # 提供版本无关的名字（release.sh 也探测 lua5.4/luac5.4 作为兜底）。
+          sudo ln -sf "$(command -v lua5.4)" /usr/local/bin/lua 2>/dev/null || true
+          if command -v luac5.4 >/dev/null 2>&1; then
+            sudo ln -sf "$(command -v luac5.4)" /usr/local/bin/luac
+          fi
+          echo "lua:  $(command -v lua  || echo '<missing>')"
+          echo "luac: $(command -v luac || echo '<missing>')"
+
+      - name: Preflight release check (version / changelog / syntax / fingerprint)
+        run: |
+          # 推送前完整检查：版本一致性、双语变更记录、代码语法、内容指纹、
+          # changes_package 同步。任意强制项失败即让发版中止。
+          # Full pre-push check: version consistency, bilingual changelog, code
+          # syntax, content fingerprint, changes_package sync. Any mandatory
+          # failure aborts the release loudly.
+          sh scripts/release.sh --check --strict
 
       - name: Build the offline install package
         run: sh scripts/make_package.sh

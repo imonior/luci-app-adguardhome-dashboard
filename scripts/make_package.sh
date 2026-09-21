@@ -53,6 +53,13 @@ cp "files/luci/i18n/adguardhome.zh-cn.po"                   "$STAGE/files/luci/i
 cp "manifest.json"                                          "$STAGE/manifest.json"
 cp "checksums.sha256"                                       "$STAGE/checksums.sha256"
 
+# ── human-readable docs: the extracted dir is the *whole project* ──
+# 文档随包发布：解压后的目录就是完整的项目（含双语 README / Changelog / LICENSE）。
+[ -f README.md ]       && cp "README.md"       "$STAGE/README.md"
+[ -f README.zh-CN.md ] && cp "README.zh-CN.md" "$STAGE/README.zh-CN.md"
+[ -f LICENSE ]         && cp "LICENSE"         "$STAGE/LICENSE"
+[ -f DEVELOPMENT.md ]  && cp "DEVELOPMENT.md"  "$STAGE/DEVELOPMENT.md"
+
 # ── installer ──
 cp "scripts/install.sh"   "$STAGE/scripts/install.sh"
 cp "scripts/uninstall.sh" "$STAGE/scripts/uninstall.sh"
