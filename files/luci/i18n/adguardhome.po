@@ -274,100 +274,100 @@ msgid "升级失败，已自动回滚；请检查日志与代理设置"
 msgstr "Upgrade failed and auto-rolled back; please check logs and proxy settings"
 
 msgid "备份管理"
-msgstr "备份管理"
+msgstr "Backup Management"
 
 msgid "刷新备份"
-msgstr "刷新备份"
+msgstr "Refresh Backups"
 
 msgid "列出 /root/agh_backup_* 备份目录，可恢复或删除"
-msgstr "列出 /root/agh_backup_* 备份目录，可恢复或删除"
+msgstr "Lists the /root/agh_backup_* backup directories, which can be restored or deleted"
 
 msgid "点击「刷新备份」加载列表"
-msgstr "点击「刷新备份」加载列表"
+msgstr "Click 'Refresh Backups' to load the list"
 
 msgid "加载中..."
-msgstr "加载中..."
+msgstr "Loading..."
 
 msgid "加载失败"
-msgstr "加载失败"
+msgstr "Failed to load"
 
 msgid "暂无备份目录（/root/agh_backup_*）"
-msgstr "暂无备份目录（/root/agh_backup_*）"
+msgstr "No backup directories yet (/root/agh_backup_*)"
 
 msgid "类型"
-msgstr "类型"
+msgstr "Type"
 
 msgid "时间戳"
-msgstr "时间戳"
+msgstr "Timestamp"
 
 msgid "文件数"
-msgstr "文件数"
+msgstr "Files"
 
 msgid "大小"
-msgstr "大小"
+msgstr "Size"
 
 msgid "含核心"
-msgstr "含核心"
+msgstr "Core included"
 
 msgid "操作"
-msgstr "操作"
+msgstr "Actions"
 
 msgid "安装"
-msgstr "安装"
+msgstr "Install"
 
 msgid "核心升级"
-msgstr "核心升级"
+msgstr "Core Upgrade"
 
 msgid "面板升级"
-msgstr "面板升级"
+msgstr "Dashboard Upgrade"
 
 msgid "恢复"
-msgstr "恢复"
+msgstr "Restore"
 
 msgid "命令"
-msgstr "命令"
+msgstr "Command"
 
 msgid "删除"
-msgstr "删除"
+msgstr "Delete"
 
 msgid "是"
-msgstr "是"
+msgstr "Yes"
 
 msgid "否"
-msgstr "否"
+msgstr "No"
 
 msgid "恢复命令（在路由器 SSH 执行）："
-msgstr "恢复命令（在路由器 SSH 执行）："
+msgstr "Restore command (run over SSH on the router):"
 
 msgid "提示：也可点击「恢复」让面板自动后台执行"
-msgstr "提示：也可点击「恢复」让面板自动后台执行"
+msgstr "Tip: you can also click 'Restore' and let the dashboard run it in the background"
 
 msgid "确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。"
-msgstr "确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。"
+msgstr "Restore from this backup? Current files will be overwritten and the page refreshes automatically afterwards."
 
 msgid "恢复中，请稍候..."
-msgstr "恢复中，请稍候..."
+msgstr "Restoring, please wait..."
 
 msgid "恢复失败，请查看日志"
-msgstr "恢复失败，请查看日志"
+msgstr "Restore failed, please check the log"
 
 msgid "恢复失败"
-msgstr "恢复失败"
+msgstr "Restore failed"
 
 msgid "确定删除此备份吗？此操作不可撤销。"
-msgstr "确定删除此备份吗？此操作不可撤销。"
+msgstr "Delete this backup? This action cannot be undone."
 
 msgid "删除失败"
-msgstr "删除失败"
+msgstr "Delete failed"
 
 msgid "网络错误"
-msgstr "网络错误"
+msgstr "Network error"
 
 msgid "清空日志"
-msgstr "清空日志"
+msgstr "Clear Log"
 
 msgid "自动刷新"
-msgstr "自动刷新"
+msgstr "Auto Refresh"
 
 msgid "清空失败"
-msgstr "清空失败"
+msgstr "Failed to clear"

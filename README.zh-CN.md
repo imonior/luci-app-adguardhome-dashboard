@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.10**
+**v2.6.0**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -368,6 +368,12 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.6.0**
+  - **修复出口 IP / 归属地横幅永远探测不出结果**：`sendGeoProbe` 直接把 RPC 响应传给了 `renderGeo`，但 LuCI 前端的 `request.get()` resolve 出来的是 **Response 包装对象**（`status` / `headers` / `json()`）而非数据载荷。于是 `renderGeo` 拿到的 `ok` 恒为 `undefined`，**每次都渲染「未能检测网络出口 IP」**——可服务端其实探测成功了（服务端探测本身没问题，而且比安装脚本更宽：10 端点 vs 4 端点，这正是「安装脚本能探测、面板永远探测不出」的原因）。现按文件里其它所有 RPC 一致的方式先 `res.json()`
+  - 同一 bug 还导致地区策略从未生效：`geoData.is_cn === false`（境外时收起仅大陆有效的预置镜像行、若已选镜像则回退直连）永远不成立。两者现已恢复
+  - **修复英文界面显示中文**：备份管理功能新增的字符串（33 条——「Backup Management」「Refresh Backups」「Restore」「Delete」、表头、确认提示等）被写入 `adguardhome.po` 时英文 `msgstr` 直接沿用了中文源文本，导致英文语言环境下界面显示中文。现已补齐英文译文，并**重新编译两个 `.lmo`**——LuCI 运行时加载的是二进制 `.lmo` 而非 `.po`，只改 `.po` 而不重编的话路由器上毫无变化
+  - **发布门禁新增多语言检查**：`scripts/release.sh` 增加独立一节——中英 `.po` 的 msgid 集合必须一致、英文 `msgstr` 不得再含中文、中文 `msgstr` 不得为空、每个 `.lmo` 必须与对应 `.po` 现场编译结果字节一致（`.lmo` 过期否则完全不可见）、视图兜底字典 `_EN` 不得有未翻译项且必须覆盖所有 `T()` 键、两份 README 的章节结构必须一致。缺少 `python3` / `po2lmo.py` 时在 `--strict` 下视为失败，而不是静默跳过门禁
 
 - **v2.5.10**
   - **修复面板自升级必然在 LMO 校验处中止**：生成的升级脚本用 `od -An -tx1` 提取 `.lmo` 末尾字节的十六进制，但 OpenWrt 的 BusyBox **没有 `od`**（install.sh 的端序判定注释其实早就写明了这一点）。`2>/dev/null` 把 `od: not found` 吞掉、摘要恒为空，于是**任何合法 `.lmo` 都校验失败**——升级回滚并报 `[verify] LMO magic bad`。现改为用 `sha256_of`（本就强制依赖）对末 4 字节求摘要、与 `LMO\0` 的已知 sha256 比对；零新增依赖，摘要为空时按失败处理（fail-closed）

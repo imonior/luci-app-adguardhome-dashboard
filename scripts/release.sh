@@ -148,7 +148,138 @@ else
     fail "checksums.sha256 missing"
 fi
 
-# ── 5. changes_package sync / 本地测试目录同步 ──
+# ── 5. i18n / 多语言（po ↔ lmo 同步、漏翻、JS 字典、双语 README 结构） ──
+#
+# 历史坑：备份管理的英文 .po 条目整段未翻译（英文界面直接显示中文），且改了 .po
+# 忘记重编 .lmo（运行时只加载 .lmo，改 po 不生效）。这两类问题界面上看不出来、
+# 语法/指纹检查也发现不了，所以必须有专门的一节。
+#
+# Historical pitfall: the "backup management" strings were left untranslated in the
+# English .po (the English UI showed Chinese), and .po edits were shipped without
+# recompiling .lmo (only the .lmo is loaded at runtime). Neither is visible in the UI
+# nor caught by the syntax/fingerprint gates — hence a dedicated section.
+hdr "i18n / 多语言"
+if have python3 && [ -f tools/po2lmo.py ]; then
+    if python3 - "$STRICT" <<'PY'
+import re, sys, os, subprocess, tempfile
+
+STRICT = len(sys.argv) > 1 and sys.argv[1] == "1"
+fails = []
+def OK(m):   print("[OK]    " + m)
+def WARN(m): print("[WARN]  " + m)
+def FAIL(m):
+    fails.append(m); print("[FAIL]  " + m)
+
+CJK = re.compile(r'[\u4e00-\u9fff]')
+
+def unquote(s):
+    s = s.strip()
+    if s.startswith('"') and s.endswith('"'): s = s[1:-1]
+    return s.replace('\\\\', '\x00').replace('\\"', '"').replace('\\n', '\n').replace('\x00', '\\')
+
+def parse_po(path):
+    """Parse a .po into {msgid: msgstr}; supports multi-line strings."""
+    d, key, val, mode = {}, None, None, None
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            s = line.strip()
+            if s.startswith('msgid '):
+                if key and val is not None: d[key] = val
+                key, val, mode = unquote(s[6:]), None, 'id'
+            elif s.startswith('msgstr '):
+                val, mode = unquote(s[7:]), 'str'
+            elif s.startswith('"') and mode:
+                if mode == 'id': key += unquote(s)
+                else: val += unquote(s)
+            else:
+                mode = None
+    if key and val is not None: d[key] = val
+    return d
+
+EN_PO = 'files/luci/i18n/adguardhome.po'
+ZH_PO = 'files/luci/i18n/adguardhome.zh-cn.po'
+en = parse_po(EN_PO); zh = parse_po(ZH_PO)
+OK("po entries: en=%d zh=%d" % (len(en), len(zh)))
+
+only_en = [k for k in en if k not in zh]
+only_zh = [k for k in zh if k not in en]
+if only_en: FAIL("i18n: %d msgid(s) missing from zh-cn.po, e.g. %r" % (len(only_en), only_en[0]))
+if only_zh: FAIL("i18n: %d msgid(s) only in zh-cn.po, e.g. %r" % (len(only_zh), only_zh[0]))
+if not only_en and not only_zh: OK("po msgid sets are identical (en ↔ zh-cn)")
+
+# 英文 .po 的译文仍含中文 = 英文界面会显示中文（漏翻）。专有名词/URL 除外不了，逐条看。
+# An English msgstr containing CJK means the English UI shows Chinese (untranslated).
+untranslated = [k for k, v in en.items() if k and CJK.search(v)]
+if untranslated:
+    FAIL("i18n: %d English msgstr(s) still Chinese, e.g. %r" % (len(untranslated), untranslated[0]))
+    for k in untranslated[:5]: print("        ↳ %s" % k)
+else:
+    OK("en msgstr: no untranslated (Chinese) entries")
+
+empty_zh = [k for k, v in zh.items() if k and not v]
+if empty_zh: FAIL("i18n: %d empty zh-cn msgstr(s), e.g. %r" % (len(empty_zh), empty_zh[0]))
+else: OK("zh-cn msgstr: no empty entries")
+
+# .lmo 必须与 .po 编译结果字节一致（只加载 .lmo，改 po 不重编 = 改动根本不生效）
+# The .lmo must be byte-identical to a fresh compile of its .po.
+tmp = tempfile.mkdtemp()
+for po, lmo in ((EN_PO, 'files/luci/i18n/adguardhome.lmo'),
+                (ZH_PO, 'files/luci/i18n/adguardhome.zh-cn.lmo')):
+    if not (os.path.exists(po) and os.path.exists(lmo)):
+        FAIL("i18n: missing %s or %s" % (po, lmo)); continue
+    data = open(lmo, 'rb').read()
+    if data[-4:] != b'LMO\x00':
+        FAIL("i18n: %s has a bad LMO magic footer" % lmo); continue
+    out = os.path.join(tmp, os.path.basename(lmo))
+    r = subprocess.run([sys.executable, 'tools/po2lmo.py', po, out], capture_output=True)
+    if r.returncode != 0:
+        FAIL("i18n: po2lmo failed for %s: %s" % (po, r.stderr.decode('utf-8', 'replace').strip())); continue
+    if open(out, 'rb').read() != data:
+        FAIL("i18n: %s is stale — recompile: python3 tools/po2lmo.py %s %s" % (lmo, po, lmo))
+    else:
+        OK("lmo matches po: %s" % os.path.basename(lmo))
+
+# JS 侧兜底字典（英文界面走这里，不经过 .po）
+# The client-side fallback dictionary (English UI goes through this, not the .po).
+src = open('files/view/dashboard.js', encoding='utf-8').read()
+m = re.search(r'var _EN = \{(.*?)\n\};', src, re.S)
+if not m:
+    FAIL("i18n: view JS fallback dictionary _EN not found")
+else:
+    entries = re.findall(r"'((?:[^'\\]|\\.)*)'\s*:\s*'((?:[^'\\]|\\.)*)'", m.group(1))
+    d = dict(entries)
+    bad = [k for k, v in d.items() if CJK.search(v)]
+    if bad: FAIL("i18n: %d _EN value(s) still Chinese, e.g. %r" % (len(bad), bad[0]))
+    else: OK("_EN dictionary: %d entries, none untranslated" % len(d))
+    used = set(re.findall(r"\bT\(\s*'((?:[^'\\]|\\.)*)'\s*\)", src))
+    missing = sorted(k for k in used if k not in d)
+    if missing:
+        FAIL("i18n: %d T() key(s) absent from _EN, e.g. %r" % (len(missing), missing[0]))
+    else:
+        OK("all %d T() keys are covered by _EN" % len(used))
+
+# 两份 README 的章节结构（数量不同 = 漏章节）
+# Both READMEs must expose the same section structure.
+def heads(p):
+    return [l.strip() for l in open(p, encoding='utf-8') if re.match(r'^#{1,3} ', l)]
+he, hz = heads('README.md'), heads('README.zh-CN.md')
+if len(he) != len(hz):
+    FAIL("i18n: README section count differs (en=%d, zh=%d) — the zh-CN file is a full translation companion" % (len(he), len(hz)))
+else:
+    OK("README section structure matches (%d headings each)" % len(he))
+
+sys.exit(1 if fails else 0)
+PY
+    then ok "i18n: all checks passed"
+    else fail "i18n: check(s) failed — see the [FAIL] lines above"
+    fi
+else
+    # 缺工具 = 静默漏检（历史 P0 高发区），--strict 下视为失败。
+    # Missing tooling means a silently skipped gate — fail under --strict.
+    if [ "$STRICT" = 1 ]; then fail "python3 or tools/po2lmo.py missing — cannot verify i18n (required under --strict)"; else warn "python3 or tools/po2lmo.py missing — skipping i18n checks"; fi
+fi
+
+# ── 6. changes_package sync / 本地测试目录同步 ──
 hdr "changes_package sync / 本地测试目录同步"
 if [ -d changes_package ]; then
     for f in files/luci/controller/adguardhome.lua:changes_package/adguardhome.lua \
@@ -163,7 +294,7 @@ else
     warn "changes_package/ not present (gitignored, local-only) — skipped"
 fi
 
-# ── 6. Git state (advisory unless --strict) / 仓库状态 ──
+# ── 7. Git state (advisory unless --strict) / 仓库状态 ──
 hdr "Git state / 仓库状态"
 if have git && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     dirty=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')

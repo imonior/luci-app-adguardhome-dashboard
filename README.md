@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.10**
+**v2.6.0**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -376,6 +376,12 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.6.0**
+  - **Fixed the egress IP / region banner never showing a result**: `sendGeoProbe` consumed the RPC response directly, but LuCI's client-side `request.get()` resolves to a **Response wrapper** (`status` / `headers` / `json()`), not the payload. `renderGeo` therefore saw `ok === undefined` on every call and always rendered the "could not detect egress IP" branch — even though the server-side probe had succeeded (the probe is fine and wider than the installer's: 10 endpoints vs 4, which is why the installer's detection always looked correct while the panel never did). The call now unwraps `res.json()` first, like every other RPC in the file
+  - The same bug also disabled the region policy: `geoData.is_cn === false` (collapse the mainland-China-only mirror presets outside CN, and fall back to Direct if a mirror was selected) never evaluated. Both now work
+  - **Fixed the English UI rendering Chinese**: every string added by the backup manager (33 entries — "Backup Management", "Refresh Backups", "Restore", "Delete", the table headers, the confirmations …) had been copied into `adguardhome.po` with the Chinese source left as the English `msgstr`, so an English-language LuCI showed Chinese labels. Translations filled in and **both `.lmo` files recompiled** — LuCI loads the binary `.lmo`, not the `.po`, so shipping a corrected `.po` alone would have changed nothing on the router
+  - **The release gate now covers i18n**: `scripts/release.sh` gained a dedicated section — en ↔ zh-cn `.po` msgid sets must match, no English `msgstr` may still contain CJK, no zh-cn `msgstr` may be empty, each `.lmo` must be byte-identical to a fresh `tools/po2lmo.py` compile of its `.po` (a stale `.lmo` is otherwise completely invisible), the view's fallback `_EN` dictionary must have no untranslated value and must cover every `T()` key, and both READMEs must expose the same section structure. A missing `python3` / `po2lmo.py` fails under `--strict` instead of silently skipping the gate
 
 - **v2.5.10**
   - **Fixed panel self-upgrade always aborting at the LMO check**: the generated upgrade runner hex-dumped the `.lmo` tail with `od -An -tx1`, but OpenWrt's BusyBox ships **no `od`** (install.sh's own byte-order comment has said exactly that all along). `2>/dev/null` swallowed `od: not found`, the digest stayed empty, and **every valid `.lmo` failed verification** — the upgrade rolled back with `[verify] LMO magic bad`. The magic check now hashes the last 4 bytes with `sha256_of` (already a hard dependency of the runner) and compares against the known digest of `LMO\0`; no new dependency, fail-closed on an empty digest

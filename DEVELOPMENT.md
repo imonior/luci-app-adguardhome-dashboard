@@ -27,6 +27,8 @@ python3 tools/po2lmo.py files/luci/i18n/adguardhome.zh-cn.po files/luci/i18n/adg
 
 > `po2lmo.py` is dev-only and is not deployed to the router.
 
+> **LuCI loads the `.lmo`, never the `.po`** — a corrected `.po` without a recompiled `.lmo` changes nothing on the router. The release gate enforces this: `scripts/release.sh` compiles each `.po` on the fly and fails if the committed `.lmo` is not byte-identical. It also fails on untranslated English entries (`msgstr` still Chinese), on en/zh-cn msgid drift, and on gaps in the view's fallback `_EN` dictionary.
+
 ---
 
 ## 3. Releasing a new version

@@ -7,7 +7,7 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.5.10";
+var DASHBOARD_VIEW_VERSION = "2.6.0";
 
 /* ── Client-side translation fallback ── */
 var _EN = {
@@ -1135,8 +1135,15 @@ return view.extend({
         if (this.geoBannerEl) { this.geoBannerEl.textContent = T('检测中...'); }
         var url = L.url('admin/services/adguardhome/geo_probe');
         return request.get(url).then(function(res) {
-            self.renderGeo(res);
-            self.geoData = res;
+            /* LuCI 的 request.get() resolve 出来的是 Response 包装对象（status/headers/json()），
+             * 必须先 res.json() 才是服务端载荷——漏掉这步会让 renderGeo 拿到包装对象，
+             * data.ok 恒为 undefined，探测永远显示失败（服务端其实已成功）。
+             * request.get() resolves to a Response wrapper; unwrap the JSON payload first,
+             * otherwise renderGeo sees ok === undefined and always shows the failure branch. */
+            return res.json();
+        }).then(function(data) {
+            self.renderGeo(data);
+            self.geoData = data;
         }).catch(function() {
             self.renderGeo({ ok: false });
         });

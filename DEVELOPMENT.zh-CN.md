@@ -27,6 +27,8 @@ python3 tools/po2lmo.py files/luci/i18n/adguardhome.zh-cn.po files/luci/i18n/adg
 
 > `po2lmo.py` 仅用于开发，不部署到路由器。
 
+> **LuCI 运行时加载的是 `.lmo` 而不是 `.po`**——只改 `.po` 而不重编 `.lmo`，路由器上毫无变化。发布门禁会强制这一点：`scripts/release.sh` 会现场编译每个 `.po`，若已提交的 `.lmo` 与之字节不一致即失败；同时检查英文条目漏翻（`msgstr` 仍是中文）、中英 msgid 漂移、以及视图兜底字典 `_EN` 的缺失项。
+
 ---
 
 ## 3. 发布新版本
