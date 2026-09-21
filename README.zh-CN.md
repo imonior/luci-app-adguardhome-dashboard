@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.0**
+**v2.6.1**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -368,6 +368,10 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.6.1**
+  - **「面板版本」区块现在会显示浏览器实际在跑哪一份视图**：新增第三行 `浏览器已加载：vX.Y.Z`，取自写死在视图 JS 里的 `DASHBOARD_VIEW_VERSION`——这才是「浏览器此刻执行的是哪一版代码」的唯一可信来源。服务端上报的版本（`当前面板版本：` / manifest）在部署后立刻更新，但它无法反映浏览器是否还在用 localStorage / HTTP 缓存里的旧视图。两者不一致时该行变红并提示缓存原因；旁边的 **`清缓存并重载`** 按钮**常驻**（而非仅在不一致时出现——浏览器跑的是旧 JS 时新代码根本没机会执行，真卡住的人恰恰看不到红字提示）。该按钮执行真正的硬重载：清掉 localStorage 里 LuCI 缓存的 view 模块、用 `cache:'reload'` 重新拉取视图 JS、清空 Cache Storage、再 replace 到带 cache-buster 的 URL。至此「升级了界面还是旧的 / 出口 IP 一直探测不出」这类纯浏览器缓存问题可以自诊断，不再无声无息
+  - **加固服务端出口 IP 探测的诊断能力**：`geo_probe` 先 `command -v curl` 判断有无 curl，缺失直接返回 `curl: missing`；每次请求追加 `; printf '\n__RC__=%s' "$?"`，把真实退出码与 stderr 通过 `errors[]` 回传；非零退出（DNS 失败 rc=6、SSL 失败 rc=60、HTTP 403 rc=22）不再被误判为成功——此前 403 页面会被当成有效响应解析，还可能把 `is_cn` 算错、连带地区策略失效。失败横幅现在直出首个错误（如 `ip-api.com: rc=60 SSL certificate problem`），不再只是一句笼统的「未能检测」。原自修复用的 `location.reload(true)`（force 参数早已被浏览器忽略）也已替换为与按钮相同的绕缓存重载
 
 - **v2.6.0**
   - **修复出口 IP / 归属地横幅永远探测不出结果**：`sendGeoProbe` 直接把 RPC 响应传给了 `renderGeo`，但 LuCI 前端的 `request.get()` resolve 出来的是 **Response 包装对象**（`status` / `headers` / `json()`）而非数据载荷。于是 `renderGeo` 拿到的 `ok` 恒为 `undefined`，**每次都渲染「未能检测网络出口 IP」**——可服务端其实探测成功了（服务端探测本身没问题，而且比安装脚本更宽：10 端点 vs 4 端点，这正是「安装脚本能探测、面板永远探测不出」的原因）。现按文件里其它所有 RPC 一致的方式先 `res.json()`

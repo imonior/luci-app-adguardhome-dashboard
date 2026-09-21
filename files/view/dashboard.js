@@ -7,7 +7,10 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.6.0";
+var DASHBOARD_VIEW_VERSION = "2.6.1";
+/* 本视图 JS 的部署路径（自修复时用于绕过 HTTP 缓存重新拉取自己）
+ * Deployed path of this view JS (used by the self-heal to re-fetch itself past the HTTP cache). */
+var VIEW_JS_URL = "/luci-static/resources/view/adguardhome/dashboard.js";
 
 /* ── Client-side translation fallback ── */
 var _EN = {
@@ -149,7 +152,12 @@ var _EN = {
     '已自动回退到「直连」：原先选中的镜像仅在中国大陆有效': 'Automatically fell back to Direct: the selected mirror only works in mainland China',
     '自定义的镜像源同样通常仅在中国大陆有效': 'Custom mirrors are likewise usually mainland-China only',
     '镜像源：把 GitHub 地址拼在其前缀后（仅中国大陆通常有效）': 'Mirror: GitHub URLs are prefixed with it (usually mainland China only)',
-    '全量代理：形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080（任意地区可用）': 'Full proxy: e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080 (works anywhere)'
+    '全量代理：形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080（任意地区可用）': 'Full proxy: e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080 (works anywhere)',
+    '请求失败或超时（服务端未返回结果）': 'Request failed or timed out (the server returned no result)',
+    '浏览器已加载：': 'Loaded in browser: ',
+    '清缓存并重载': 'Clear Cache & Reload',
+    '浏览器正在执行的视图版本，与服务端一致': 'The view version currently executing; matches the server',
+    '浏览器缓存了旧视图，界面可能仍是升级前的样子 —— 点击右侧「清缓存并重载」': 'The browser cached an old view, so the UI may still look pre-upgrade - click "Clear Cache & Reload" on the right',
 };
 
 var _ZH_CACHE = null;  // _isChinese 结果缓存，页面生命周期内不用重复检测 / cache _isChinese result; no re-detect within page lifetime
@@ -438,6 +446,37 @@ return view.extend({
         ]);
     },
 
+    /* Bypass every layer that keeps an old view alive and reload once.
+     * 绕过所有让旧视图存活的缓存层并重载一次：
+     * ① localStorage 里 LuCI 缓存的 view 模块；② HTTP 缓存里的 view JS（用 cache:'reload'
+     * 重新拉取，覆盖该条目）；③ Cache Storage；④ replace 到带 cache-buster 的 URL。
+     * 注意 location.reload(true) 的 force 参数已被浏览器忽略，无法取代以上步骤。 */
+    hardReload: function() {
+        try {
+            for (var _i = localStorage.length - 1; _i >= 0; _i--) {
+                var _k = localStorage.key(_i);
+                if (_k && (_k.indexOf('view:') === 0 || _k.indexOf('luci') === 0)) {
+                    try { localStorage.removeItem(_k); } catch (e) {}
+                }
+            }
+        } catch (e) {}
+        var _bust = Promise.resolve();
+        try {
+            _bust = fetch(VIEW_JS_URL + '?_cb=' + Date.now(), { cache: 'reload', credentials: 'same-origin' })
+                .then(function() {}, function() {});
+        } catch (e) {}
+        _bust.then(function() {
+            if (window.caches && caches.keys) {
+                return caches.keys().then(function(_ks) {
+                    return Promise.all(_ks.map(function(k) { return caches.delete(k); }));
+                }).then(function() {}, function() {});
+            }
+        }).then(function() {}, function() {}).then(function() {
+            var _u = location.href.split('#')[0];
+            location.replace(_u + (_u.indexOf('?') >= 0 ? '&' : '?') + '_aghv=' + Date.now());
+        });
+    },
+
     render: function(data) {
         var status = data[0];
         var logData = data[1];
@@ -455,13 +494,7 @@ return view.extend({
                 var _rk = '__agh_view_reload_' + status.dashboard_version;
                 if (!sessionStorage.getItem(_rk)) {
                     sessionStorage.setItem(_rk, '1');
-                    for (var _i = localStorage.length - 1; _i >= 0; _i--) {
-                        var _k = localStorage.key(_i);
-                        if (_k && (_k.indexOf('view:') === 0 || _k.indexOf('luci') === 0)) {
-                            try { localStorage.removeItem(_k); } catch (e) {}
-                        }
-                    }
-                    location.reload(true);
+                    this.hardReload();
                     return;
                 }
             } catch (e) {}
@@ -660,6 +693,33 @@ return view.extend({
         }, T('升级面板'));
         this.dashUpgradeBtn = dashUpgradeBtn;
 
+        /* 浏览器已加载版本：DASHBOARD_VIEW_VERSION 写死在这份 JS 里，所以它是"浏览器此刻执行的
+         * 是哪一版"的唯一可信来源。中间那个 dashboard_version 来自服务端 manifest，升级后立刻就变，
+         * 但它反映不了浏览器是否还在跑 HTTP 缓存里的旧 JS——两者不一致即为典型的缓存残留。
+         * The version compiled into this JS file: the only trustworthy answer to "which code is
+         * the browser actually running". status.dashboard_version comes from the server manifest
+         * and cannot tell whether the browser is still executing a cached older view. */
+        var dashLoadedStale = !!(status.dashboard_version && status.dashboard_version !== DASHBOARD_VIEW_VERSION);
+        var dashLoadedCode = E('code', {
+            style: dashLoadedStale
+                ? 'color:#e74c3c; font-weight:bold; cursor:help'
+                : 'color:' + theme.mutedColor,
+            title: dashLoadedStale
+                ? T('浏览器缓存了旧视图，界面可能仍是升级前的样子 —— 点击右侧「清缓存并重载」')
+                : T('浏览器正在执行的视图版本，与服务端一致')
+        }, 'v' + DASHBOARD_VIEW_VERSION);
+        this.dashLoadedVerEl = dashLoadedCode;
+
+        /* 常驻而非仅在不一致时出现：浏览器跑的是旧 JS 时，新代码根本没机会执行，
+         * 也就显示不出红色提示——真正卡住的人恰恰看不到它。任何时候点都是一次安全的硬刷新。
+         * Always visible: when the browser runs a stale JS, new code never executes, so a
+         * conditional warning would be invisible to exactly the people who need it. */
+        var dashReloadBtn = E('button', {
+            class: 'btn cbi-button',
+            style: 'margin-right:10px',
+            click: function() { self.hardReload(); }
+        }, T('清缓存并重载'));
+
         var logPreStyle = 'max-height:240px;overflow-y:auto;padding:10px;background:' + theme.logBg + ';color:' + theme.logColor + ';font-size:12px;line-height:1.4;border-radius:4px;white-space:pre-wrap;word-break:break-all';
         var secStyle = 'margin:16px 0 6px;font-size:13px;font-weight:bold;color:' + theme.mutedColor + ';';
 
@@ -788,10 +848,13 @@ return view.extend({
                         E('strong', {}, T('当前面板版本：')),
                         dashCurrCode,
                         E('strong', {}, T('面板最新版本：')),
-                        dashLatestCode
+                        dashLatestCode,
+                        E('strong', {}, T('浏览器已加载：')),
+                        dashLoadedCode
                     ]),
                     dashCheckBtn,
-                    dashUpgradeBtn
+                    dashUpgradeBtn,
+                    dashReloadBtn
                 ])
             ]),
 
@@ -1155,8 +1218,11 @@ return view.extend({
         if (!el) return;
         var theme = _themeStyles();
         var bg, border, color, main, hint;
+        var diag = '';   /* 失败原因（curl 退出码 / stderr），原样展示，不翻译 / raw failure reason, untranslated */
         if (!data || !data.ok || !data.ip) {
             var _tried = (data && data.tried && data.tried.length) ? data.tried.join(', ') : '';
+            var _errs = (data && data.errors && data.errors.length) ? data.errors : [];
+            diag = _errs.length ? _errs[0] : (data ? (T('请求失败或超时（服务端未返回结果）')) : T('请求失败或超时（服务端未返回结果）'));
             main = T('未能检测网络出口 IP（可能网络受限）');
             hint = T('未能确定地区，如直连失败请手动选择代理') + (_tried ? ('（已尝试：' + _tried + '）') : '');
             bg = theme.panelBg; border = theme.panelBorder; color = theme.mutedColor;
@@ -1186,6 +1252,15 @@ return view.extend({
         el.innerHTML = '';
         el.appendChild(E('div', { style: 'font-weight:bold' }, '🌏 ' + main));
         el.appendChild(E('div', { style: 'margin-top:4px; font-size:12px; opacity:0.92' }, hint));
+        if (diag) {
+            /* 失败原因直出（curl 退出码 + stderr / 缺 curl / 请求超时），诊断"为什么探测不到"
+             * 全靠这一行——否则界面上一句"可能网络受限"根本分不清是缺命令、SSL、DNS 还是被墙。
+             * Raw reason line: without it, "possibly network-restricted" cannot distinguish a
+             * missing curl, an SSL error, a DNS failure, or a blocked host. */
+            el.appendChild(E('div', {
+                style: 'margin-top:5px; font-size:11px; opacity:0.8; font-family:monospace; word-break:break-all'
+            }, '⚠ ' + diag));
+        }
         if (fellBack) {
             el.appendChild(E('div', { style: 'margin-top:4px; font-size:12px; font-weight:bold' },
                 T('已自动回退到「直连」：原先选中的镜像仅在中国大陆有效')

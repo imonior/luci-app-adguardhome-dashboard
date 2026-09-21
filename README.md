@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.0**
+**v2.6.1**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -376,6 +376,10 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.6.1**
+  - **The "Dashboard Version" block now shows which view the browser is actually running**: a third line, `Loaded in browser: vX.Y.Z`, is driven by `DASHBOARD_VIEW_VERSION` baked into the view JS — the only reliable answer to "which code is the browser executing right now". The server-reported version (`Current:` / the manifest) updates on deploy but cannot tell whether the browser is still serving a cached older view from localStorage or the HTTP cache. When the two differ, the line turns red with a tooltip explaining the cache situation, and a **`Clear Cache & Reload`** button is always present (not only on mismatch — a stale JS never runs new code, so it could never show the warning to the person who needs it). The button does a genuine hard reload that clears LuCI's cached view module in localStorage, re-fetches the view JS with `cache:'reload'`, drops Cache Storage, and replaces to a cache-busted URL. This makes browser-cache cases (the "upgraded but the UI is still old / egress IP never shows" reports) self-diagnosing instead of silent
+  - **Hardened the server-side egress-IP probe diagnostics**: `geo_probe` now checks `command -v curl` first and returns `curl: missing` when the package is absent; each endpoint appends `; printf '\n__RC__=%s' "$?"` so the real exit code and stderr come back in `errors[]`; a non-zero exit (DNS failure rc=6, SSL rc=60, HTTP 403 rc=22) is no longer misread as success — a 403 body used to be parsed as a valid response and could set `is_cn` wrong, breaking the region policy. The failure banner now surfaces the first error (e.g. `ip-api.com: rc=60 SSL certificate problem`) instead of a generic "could not detect". The old `location.reload(true)` self-heal (force arg long-ignored by browsers) was replaced by the same cache-bypassing reload as the button above
 
 - **v2.6.0**
   - **Fixed the egress IP / region banner never showing a result**: `sendGeoProbe` consumed the RPC response directly, but LuCI's client-side `request.get()` resolves to a **Response wrapper** (`status` / `headers` / `json()`), not the payload. `renderGeo` therefore saw `ok === undefined` on every call and always rendered the "could not detect egress IP" branch — even though the server-side probe had succeeded (the probe is fine and wider than the installer's: 10 endpoints vs 4, which is why the installer's detection always looked correct while the panel never did). The call now unwraps `res.json()` first, like every other RPC in the file

@@ -865,19 +865,47 @@ local GEO_APIS = {
 }
 
 function geo_probe()
-    local result = { ok = false, ip = "", country = "", country_code = "", region = "", city = "", is_cn = nil, source = "", tried = {} }
+    local result = { ok = false, ip = "", country = "", country_code = "", region = "", city = "", is_cn = nil, source = "", tried = {}, errors = {}, curl = "yes" }
+    -- util.exec 只回传 stdout：curl 不存在、SSL 失败、DNS 失败在界面上长得一模一样
+    -- （都是「未能检测」），所以先把「有没有 curl」和「为什么失败」显式探一次并回传。
+    -- util.exec returns stdout only, so "no curl", "SSL failure" and "DNS failure" all look
+    -- identical in the UI ("could not detect"). Detect and report the real reason instead.
+    local curl_path = util.exec("command -v curl 2>/dev/null") or ""
+    curl_path = curl_path:gsub("%s+", "")
+    if curl_path == "" then
+        result.curl = "missing"
+        table.insert(result.errors, "curl: command not found — install the 'curl' package")
+        http.prepare_content("application/json")
+        http.write_json(result)
+        return
+    end
     local start = os.time()
     for _, api in ipairs(GEO_APIS) do
         if os.difftime(os.time(), start) > 25 then break end
         local out = ""
+        local rc = nil
         for _ = 1, 2 do
-            out = util.exec("curl -fsSL --connect-timeout 4 --max-time 6 '" .. api.url .. "' 2>/dev/null") or ""
-            out = out:gsub("^%s+", ""):gsub("%s+$", "")
-            if #out >= 5 then break end
+            -- 2>&1 + 追加 __RC__=<exit code>：stderr 里才是失败原因（SSL/DNS/HTTP 码），
+            -- 退出码则区分「有输出但非 0」这类情况。两者一起回传给界面。
+            -- Merge stderr and append the exit code; stderr carries the real reason (SSL/DNS/HTTP).
+            local raw = util.exec("curl -fsSL --connect-timeout 4 --max-time 6 '" .. api.url .. "' 2>&1; printf '\\n__RC__=%s' \"$?\"") or ""
+            rc = raw:match("__RC__=(%S+)")
+            out = raw:gsub("%s*__RC__=%S+%s*$", ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if #out >= 5 and rc == "0" then break end
         end
-        table.insert(result.tried, api.url:match("^https?://([^/]+)") or api.url)
+        local host = api.url:match("^https?://([^/]+)") or api.url
+        table.insert(result.tried, host)
+        if not (#out >= 5 and rc == "0") then
+            local why = out
+            if #why > 120 then why = why:sub(1, 120) end
+            if #why > 0 then
+                table.insert(result.errors, host .. ": rc=" .. (rc or "?") .. " " .. why)
+            else
+                table.insert(result.errors, host .. ": rc=" .. (rc or "?"))
+            end
+        end
         local ip
-        if #out >= 5 then
+        if #out >= 5 and rc == "0" then
             local cc, country, region, city
             if api.fmt == "ipapi" then
                 ip = _json_field(out, "query")
