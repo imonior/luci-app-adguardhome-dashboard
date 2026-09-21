@@ -14,8 +14,10 @@ A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 ### One-click install (recommended)
 
 ```sh
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh | sh
 ```
+
+> Piping the script into `sh` (rather than `sh -c "$(curl …)"`) avoids the OS **per-argument length limit**: the old form passed the whole installer as a single command-line argument, and aborts *before running* as soon as the script grows past that limit. The prompts are read from the terminal, so the interactive steps are unaffected.
 
 The install script runs in two steps:
 
@@ -50,7 +52,7 @@ On startup the script auto-detects GitHub connectivity and tests each candidate,
 
 ```sh
 # mirror (URL prefix)
-GITHUB_PROXY=https://ghfast.top/ sh -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh | GITHUB_PROXY=https://ghfast.top/ sh
 # full proxy server (system-proxy style)
 GITHUB_PROXY=proxy|http://127.0.0.1:7890 sh install.sh
 ```
@@ -100,7 +102,7 @@ To build the package yourself: `sh scripts/make_package.sh` (writes to `dist/`).
 ## Uninstall
 
 ```sh
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/uninstall.sh)"
+curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/uninstall.sh | sh
 ```
 
 ---
@@ -275,7 +277,7 @@ The install log shows `sha256 mismatch` / `content verification failed` and prom
 
 ```sh
 # Re-run with another proxy
-GITHUB_PROXY=https://ghfast.top/ sh -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh | GITHUB_PROXY=https://ghfast.top/ sh
 # Or connect directly to raw.githubusercontent.com (bypass mirror cache)
 curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/files/view/dashboard.js -o /www/luci-static/resources/view/adguardhome/dashboard.js
 ```
@@ -379,8 +381,10 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
   - **Fixed the panel self-upgrade silently doing nothing** (the "new version detected, but the log stays empty and nothing upgrades" bug): the generated upgrade script's stderr used to land on the HTTP socket and vanish with the connection, so any parse/startup failure left no trace at all. Both generated runners (core + panel) now redirect stderr into the execution log, and the dashboard checks the RPC `success` field instead of trusting HTTP 200 — a failed launch now raises a real error notification instead of a false "upgrade started" banner
   - **Anti-stale-view self-heal**: the view JS now embeds its own `DASHBOARD_VIEW_VERSION` and compares it with the server-reported version on render. A mismatch means the browser is executing a cached older view (LuCI caches view modules keyed by URL in localStorage / the HTTP cache — which is why a stale UI could survive a reinstall + refresh), so the dashboard clears those cached view entries and hard-reloads once (sessionStorage-guarded against loops). Upgrading no longer requires clearing browser storage by hand
   - **More robust network egress / region detection**: the geo probe now tries 10 endpoints instead of 4 (adds ipapi.co, api.myip.com, extreme-ip-lookup.com, checkip.amazonaws.com, ifconfig.me, icanhazip.com plus plain-IP services), retries each endpoint once, uses `--connect-timeout 4 --max-time 6` per attempt with a 25s overall cap, and returns the list of endpoints tried so the UI can show them on failure
-  - **Release tooling**: new `scripts/release.sh` orchestrator — one command runs the full pre-push check (version consistency across `manifest.json` / the view JS constant / both READMEs, bilingual changelog entries, shell + JS + Lua syntax, `checksums.sha256` fingerprint, `changes_package/` sync) and then builds the whole-project tarball. The release workflow calls it as `--check --strict` before building, installs Lua on the runner (the image ships none, which had silently disabled the Lua syntax gate) and checks out full history so the tag/version cross-check can resolve the tag
-  - The offline package now also carries both READMEs, `LICENSE` and `DEVELOPMENT.md`, so the extracted directory is the complete project
+  - **Release tooling**: new `scripts/release.sh` orchestrator — one command runs the full pre-push check (version consistency across `manifest.json` / the view JS constant / both READMEs, bilingual changelog entries, shell + JS + Lua syntax, `checksums.sha256` fingerprint, `changes_package/` sync) and then builds the offline installer tarball. The release workflow calls it as `--check --strict` before building, installs Lua on the runner (the image ships none, which had silently disabled the Lua syntax gate) and checks out full history so the tag/version cross-check can resolve the tag
+  - The release asset stays a **lean offline installer** (deployable files + installer + manifest/checksums only) — the complete project source is the auto-generated *Source code* archive on the release page, so README/LICENSE are deliberately **not** duplicated into the installer
+  - **One-line install command switched to the pipe form** — `curl -fsSL <url> | sh` instead of `sh -c "$(curl …)"`. The command substitution expands the whole script into a single argv, so it dies with `argument list too long` once the script outgrows the per-argument limit; piping through stdin has no such ceiling (and no temp file to clean up). The installer is now safe to feed this way: interactive reads go through a `read_input` helper that falls back to `/dev/tty` when the script itself arrives on stdin (a bare `read` would swallow the *next line of the script*), and interactivity is decided by one `_is_interactive` predicate shared with that reader, so a piped run can still prompt. `sh install.sh` (and `printf '1\n' | sh install.sh`) behave exactly as before. When the script is fed from stdin the local-project paths are cleared too, so the "re-download after deleting the local copy" branch can never resolve to the pseudo-parent of the current directory
+  - `DEVELOPMENT.md` release section rewritten to match the current pipeline (four-place version bump, checksum regeneration, `scripts/release.sh --check`, CI `--check --strict`)
 
 - **v2.5.8**
   - **Offline install package**: every release now ships a self-contained tarball (built by `scripts/make_package.sh` + the release workflow on tag push). Download, extract, run `scripts/install.sh` — the `OFFLINE_PACKAGE` marker gates **every** network touchpoint (geo probe, connection selection, online version check, file downloads)

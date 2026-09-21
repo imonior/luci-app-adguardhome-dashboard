@@ -33,31 +33,48 @@ python3 tools/po2lmo.py files/luci/i18n/adguardhome.zh-cn.po files/luci/i18n/adg
 
 1. Edit source files under `files/`.
 2. Recompile `.po` → `.lmo` (see above).
-3. **Regenerate the content-fingerprint manifest** (required after ANY change to files under `files/`; otherwise install/panel-upgrade will abort with a sha256 mismatch):
+3. **Bump the version in all four places.** The pre-push check enforces this — missing any one of them fails the release:
+   - `manifest.json` → `"version"` (the runtime single source of truth: `adguardhome.lua` reads the deployed `/usr/share/adguardhome-dashboard/manifest.json` to learn the installed version)
+   - `files/view/dashboard.js` → `DASHBOARD_VIEW_VERSION` (the baseline the anti-stale-view self-heal compares against)
+   - `README.md` / `README.zh-CN.md` → the `**vX.Y.Z**` heading near the top of each file
+   - `README.md` / `README.zh-CN.md` → a `- **vX.Y.Z**` changelog entry (English first, Chinese companion)
+
+4. **Regenerate the content-fingerprint manifest** (required after ANY change to files under `files/`; otherwise install/panel-upgrade will abort with a sha256 mismatch):
    ```sh
-   sha256sum files/luci/controller/adguardhome.lua \
-             files/luci/menu.d/luci-app-adguardhome-dashboard.json \
-             files/luci/acl.json \
-             files/view/dashboard.js \
+   sha256sum files/luci/acl.json \
+             files/luci/controller/adguardhome.lua \
              files/luci/i18n/adguardhome.lmo \
              files/luci/i18n/adguardhome.zh-cn.lmo \
              files/luci/i18n/adguardhome.po \
-             files/luci/i18n/adguardhome.zh-cn.po > checksums.sha256
-   # append manifest.json separately (key is the repo-root path, matching the download src)
-   printf '%s  manifest.json\n' "$(sha256sum manifest.json | awk '{print $1}')" >> checksums.sha256
+             files/luci/i18n/adguardhome.zh-cn.po \
+             files/luci/menu.d/luci-app-adguardhome-dashboard.json \
+             files/view/dashboard.js \
+             manifest.json > checksums.sha256
+   sha256sum -c checksums.sha256      # must be 9/9 OK before you go on
    ```
-4. Bump the `version` field in `manifest.json` using semantic versioning. **The version is a single source of truth**: the router's `adguardhome.lua` reads the locally deployed `/usr/share/adguardhome-dashboard/manifest.json` at runtime to get the installed version (it no longer depends on the hardcoded `DASHBOARD_VERSION` constant, which only serves as a fallback when the local manifest is missing). So a release only requires changing one number in `manifest.json` — no manual lua constant sync.
-5. `git add files/ checksums.sha256 manifest.json && git commit -m "bump dashboard to x.y.z" && git push origin main`
+
+5. Sync the local test bundle: `cp` every changed file into `changes_package/` and confirm with `diff -q` (see §1).
+6. **Run the pre-push check** — it must pass before you push:
+
+   ```sh
+   sh scripts/release.sh --check
+   ```
+
+   It enforces version consistency (all four places above), bilingual changelog entries, code syntax (`sh -n` / `node --check` / `luac -p`), the `checksums.sha256` fingerprint and the `changes_package/` sync. CI runs the same script as `--check --strict`, so anything it catches locally would abort the release too.
+
+7. `git add files/ checksums.sha256 manifest.json README.md README.zh-CN.md && git commit -m "release: vX.Y.Z — …" && git push origin main`
 
    After pushing to main, every router can click "Check panel update" to see the new version and upgrade online.
 
-6. Tag and push to publish the offline install package as a release asset:
+8. Tag and push to publish the offline installer as a release asset:
 
    ```sh
-   git tag vX.Y.Z && git push origin vX.Y.Z
+   git tag vX.Y.Z && git push origin main --tags
    ```
 
-   `.github/workflows/release.yml` then checks out the tag, re-runs `sha256sum -c checksums.sha256`, builds the tarball via `scripts/make_package.sh` and attaches it to the GitHub Release.
+   `.github/workflows/release.yml` then checks out the tag, runs `sh scripts/release.sh --check --strict`, builds the tarball with `scripts/make_package.sh` and attaches it to the GitHub Release.
+
+   > The tarball is a **lean offline installer** — deployable files, installer, `manifest.json`, `checksums.sha256`, `OFFLINE_PACKAGE` and `INSTALL.md` only. Documentation (README/LICENSE/DEVELOPMENT) is deliberately **not** bundled: the complete project source is the auto-generated *Source code* archive attached to every release.
 
    > **The tag version must match `manifest.json`.** The panel reads the deployed `manifest.json` to learn the installed version, so a mismatch makes "Check panel update" compare against the wrong number.
 
@@ -71,7 +88,7 @@ python3 tools/po2lmo.py files/luci/i18n/adguardhome.zh-cn.po files/luci/i18n/adg
 sh scripts/make_package.sh      # -> dist/luci-app-adguardhome-dashboard-vX.Y.Z.tar.gz
 ```
 
-Layout (deliberately identical to the repo, so `install.sh`'s existing "install using local files" branch is reused with no separate offline installer to maintain):
+Layout — exactly the installer-relevant subset of the repo (documentation is intentionally **not** bundled), so `install.sh`'s existing "install using local files" branch is reused with no separate offline installer to maintain:
 
 ```
 luci-app-adguardhome-dashboard-vX.Y.Z/

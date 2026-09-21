@@ -33,31 +33,48 @@ python3 tools/po2lmo.py files/luci/i18n/adguardhome.zh-cn.po files/luci/i18n/adg
 
 1. 修改 `files/` 下的源文件。
 2. 重新编译 `.po` → `.lmo`（见上）。
-3. **重新生成内容指纹清单**（任何对 `files/` 下文件的改动都必须执行，否则 install/面板升级会判定 sha256 不匹配而中止）：
+3. **四处同步 bump 版本号**。推送前检查会强制校验，漏掉任何一处都会导致发版失败：
+   - `manifest.json` → `"version"`（运行时单一数据源：`adguardhome.lua` 读取已部署的 `/usr/share/adguardhome-dashboard/manifest.json` 获知已安装版本）
+   - `files/view/dashboard.js` → `DASHBOARD_VIEW_VERSION`（「防旧视图」自修复的比对基准）
+   - `README.md` / `README.zh-CN.md` → 各自顶部 `**vX.Y.Z**` 标记
+   - `README.md` / `README.zh-CN.md` → `- **vX.Y.Z**` 变更记录条目（英文在前、中文对照）
+
+4. **重新生成内容指纹清单**（任何对 `files/` 下文件的改动都必须执行，否则 install/面板升级会判定 sha256 不匹配而中止）：
    ```sh
-   sha256sum files/luci/controller/adguardhome.lua \
-             files/luci/menu.d/luci-app-adguardhome-dashboard.json \
-             files/luci/acl.json \
-             files/view/dashboard.js \
+   sha256sum files/luci/acl.json \
+             files/luci/controller/adguardhome.lua \
              files/luci/i18n/adguardhome.lmo \
              files/luci/i18n/adguardhome.zh-cn.lmo \
              files/luci/i18n/adguardhome.po \
-             files/luci/i18n/adguardhome.zh-cn.po > checksums.sha256
-   # manifest.json 单独追加（key 为仓库根路径，与下载 src 一致）
-   printf '%s  manifest.json\n' "$(sha256sum manifest.json | awk '{print $1}')" >> checksums.sha256
+             files/luci/i18n/adguardhome.zh-cn.po \
+             files/luci/menu.d/luci-app-adguardhome-dashboard.json \
+             files/view/dashboard.js \
+             manifest.json > checksums.sha256
+   sha256sum -c checksums.sha256      # 必须 9/9 OK 才能继续
    ```
-4. 在 `manifest.json` 中按语义化版本 bump `version` 字段。**版本号是单一数据源**：路由器上的 `adguardhome.lua` 会在运行时读取本地部署的 `/usr/share/adguardhome-dashboard/manifest.json` 获取已安装版本（不再依赖写死的 `DASHBOARD_VERSION` 常量，该常量仅作为「本地 manifest 缺失」时的兜底）。因此发版**只需改 manifest.json 一个数字**，无需手动同步 lua 常量。
-5. `git add files/ checksums.sha256 manifest.json && git commit -m "bump dashboard to x.y.z" && git push origin main`
+
+5. 同步本地测试包：把每个改动过的文件 `cp` 进 `changes_package/`，并用 `diff -q` 确认（见第 1 节）。
+6. **跑推送前检查** —— 必须全绿才能推送：
+
+   ```sh
+   sh scripts/release.sh --check
+   ```
+
+   它会强制校验版本一致性（上述四处）、双语变更记录条目、代码语法（`sh -n` / `node --check` / `luac -p`）、`checksums.sha256` 指纹与 `changes_package/` 同步。CI 以 `--check --strict` 跑同一脚本，因此本地能拦下的问题在 CI 同样会中止发版。
+
+7. `git add files/ checksums.sha256 manifest.json README.md README.zh-CN.md && git commit -m "release: vX.Y.Z — …" && git push origin main`
 
    推到 main 后，所有路由器上点「检查面板更新」即可看到新版本并在线升级。
 
-6. 打 tag 并推送，同时发布离线安装包资产：
+8. 打 tag 并推送，同时发布离线安装包资产：
 
    ```sh
-   git tag vX.Y.Z && git push origin vX.Y.Z
+   git tag vX.Y.Z && git push origin main --tags
    ```
 
-   `.github/workflows/release.yml` 会检出该 tag、重跑一次 `sha256sum -c checksums.sha256`、用 `scripts/make_package.sh` 生成压缩包，并作为资产附到 GitHub Release。
+   `.github/workflows/release.yml` 会检出该 tag、先跑 `sh scripts/release.sh --check --strict`、再用 `scripts/make_package.sh` 生成压缩包，并作为资产附到 GitHub Release。
+
+   > 该压缩包是**精简的离线安装包**——只含可部署文件、安装脚本、`manifest.json`、`checksums.sha256`、`OFFLINE_PACKAGE` 与 `INSTALL.md`。文档（README / LICENSE / DEVELOPMENT）**刻意不随包**：完整项目源码就是每个 Release 自动附带的 *Source code* 归档。
 
    > **tag 版本号必须与 `manifest.json` 一致。** 面板读取已部署的 `manifest.json` 来获知「已安装版本」，两者不一致会导致「检查面板更新」拿错数字比对。
 
@@ -71,7 +88,7 @@ python3 tools/po2lmo.py files/luci/i18n/adguardhome.zh-cn.po files/luci/i18n/adg
 sh scripts/make_package.sh      # -> dist/luci-app-adguardhome-dashboard-vX.Y.Z.tar.gz
 ```
 
-包结构（刻意与仓库保持一致，从而直接复用 `install.sh` 已有的「使用本地文件安装」分支，不需要另外维护一套离线安装器）：
+包结构——只包含仓库里与安装相关的子集（**刻意不随带任何文档**），从而直接复用 `install.sh` 已有的「使用本地文件安装」分支，不需要另外维护一套离线安装器：
 
 ```
 luci-app-adguardhome-dashboard-vX.Y.Z/

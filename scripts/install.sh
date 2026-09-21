@@ -30,6 +30,58 @@ if [ -z "$SCRIPT_DIR" ]; then SCRIPT_DIR="$(pwd)"; fi
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR" 2>/dev/null)"
 LOCAL_FILES="$PROJECT_ROOT/files"
 
+# ── 运行方式检测：管道喂入时 fd 0 就是脚本正文本身 ──
+# `curl ... | sh` 时 $0 是解释器名（sh/bash），磁盘上并不存在脚本文件，因此 PROJECT_ROOT
+# 毫无意义 —— 它会被推成 cwd 的上级目录，最坏情况下让「删除本地项目」分支误删真实目录。
+# 判别到这一情形就清空路径上下文，禁用一切本地文件分支。
+# When the script is piped into the shell (`curl ... | sh`), $0 is the interpreter name and no
+# script file exists on disk, so PROJECT_ROOT is meaningless — worse, it degenerates into the
+# parent of cwd and would let the "delete local project" branch remove a real directory. Drop
+# the on-disk path context whenever we detect that invocation.
+_script_from_stdin=0
+case "$0" in
+    sh|bash|ash|dash|-sh|-bash|/bin/sh|/bin/bash|/bin/ash|/bin/dash) _script_from_stdin=1 ;;
+esac
+if [ "$_script_from_stdin" = "1" ]; then
+    PROJECT_ROOT=""
+    LOCAL_FILES=""
+fi
+
+# ── 交互输入统一入口 ──
+# 管道运行时 `read` 会把**下一行脚本**当成输入吞掉（实测：整行脚本被吃掉、if 分支错乱），
+# 因此仅在「脚本来自 stdin」时改从 /dev/tty 读取；无控制终端时返回非 0，调用方走默认值。
+# 其它运行方式（sh install.sh、把答案重定向到 stdin）行为完全不变。
+# Interactive input entry point. Under a piped run a plain `read` swallows the *next script
+# line*, so only when the script itself comes from stdin do we read from /dev/tty. Without a
+# controlling terminal it returns non-zero and the caller falls back to its default. Every other
+# invocation (sh install.sh, answers redirected onto stdin) behaves exactly as before.
+_has_tty=0
+if { : < /dev/tty; } 2>/dev/null; then _has_tty=1; fi
+read_input() {
+    if [ "$_script_from_stdin" != "1" ]; then
+        read -r "$1"
+    elif [ "$_has_tty" = "1" ]; then
+        read -r "$1" < /dev/tty
+    else
+        return 1
+    fi
+}
+
+# 是否处于「可交互」状态。`sh install.sh` 时看 stdin 是否为终端；脚本经管道喂入时可交互性
+# 取决于「能否打开控制终端 /dev/tty」——此时 fd 0 是脚本正文，`[ -t 0 ]` 永远为假。
+# 所有「交互 → 重新提示 / 非交互 → 直接中止」的分支都必须走这里，不能再用 `[ -t 0 ]`，
+# 否则管道模式下明明读得到终端，却被判成非交互而中止安装。
+# Interactive-or-not. Under `sh install.sh` this is "is stdin a terminal"; when the script itself
+# is piped, fd 0 carries the script text so that test can never pass — interactive then means "the
+# controlling terminal /dev/tty is still openable". Every interactive-vs-noninteractive branch
+# must use this predicate instead of `[ -t 0 ]`, or a piped run that CAN read the terminal is
+# misjudged as non-interactive and aborts.
+_is_interactive() {
+    if [ -t 0 ]; then return 0; fi
+    if [ "$_script_from_stdin" = "1" ] && [ "$_has_tty" = "1" ]; then return 0; fi
+    return 1
+}
+
 # ── 离线模式：自包含发布包 / 手动指定 ──
 # Offline mode. A release tarball carries an OFFLINE_PACKAGE marker beside install.sh, so that
 # `sh install.sh` inside an extracted package installs purely from ./files and never touches the
@@ -106,7 +158,7 @@ echo "$(_t "Language / 语言:" "语言 / Language:")"
 echo "  1) English (default)"
 echo "  2) 中文"
 printf "$(_t "Select [1/2, default 1]: " "请选择 [1/2，默认 1]: ")"
-read -r _lang_choice || true
+read_input _lang_choice || true
 case "$_lang_choice" in
     2) _lang="zh" ;;
     *) _lang="en" ;;
@@ -255,7 +307,7 @@ gh_prompt_custom() {
         echo "    1) $(_t "Mirror source (URL prefix), e.g. https://ghfast.top/ — mainland China only" "镜像源（URL 前缀），如 https://ghfast.top/ —— 仅中国大陆有效")"
         echo "    2) $(_t "Full proxy server (curl -x), e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080 — any region" "全量代理服务器（curl -x），如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080 —— 任意地区可用")"
         printf "$(_t "Select type [1/2, default 1]: " "请选择类型 [1/2，默认 1]: ")"
-        read -r _c_type || true
+        read_input _c_type || true
         _c_type=${_c_type:-1}
 
         if [ "$_c_type" = "2" ]; then
@@ -265,7 +317,7 @@ gh_prompt_custom() {
             _c_mode="mirror"
             printf "$(_t "Mirror prefix, or leave empty to abort: " "镜像源前缀，留空则中止: ")"
         fi
-        read -r USER_PROXY || true
+        read_input USER_PROXY || true
         USER_PROXY=$(echo "$USER_PROXY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         if [ -z "$USER_PROXY" ]; then return 1; fi
 
@@ -483,7 +535,7 @@ gh_select_connection() {
     # 交互选择：选中某节点则固定使用（不静默跳到其它节点）；下载失败可交互重选 / Interactive: fixed-use of chosen node; re-pick on failure
     while true; do
         printf "$(_t "Select connection [1-%d, default %d]: " "请选择连接 [1-%d，默认 %d]: ")" "$_custom_opt" "$_default_choice"
-        read -r CONN_CHOICE || true
+        read_input CONN_CHOICE || true
         CONN_CHOICE=${CONN_CHOICE:-$_default_choice}
 
         if [ "$CONN_CHOICE" = "$_custom_opt" ]; then
@@ -493,7 +545,7 @@ gh_select_connection() {
             # condition — as a standalone failing command, `set -e` kills the install silently.
             if gh_prompt_custom; then
                 break
-            elif [ -t 0 ]; then
+            elif _is_interactive; then
                 # 交互模式下留空 → 回到选择菜单，可改选直连/内置代理（不强制中止）
                 # Interactive: empty input -> back to the menu so they can pick Direct/built-in instead
                 log "$(_t "Custom proxy empty, please choose another option" "自定义代理为空，请选择其他选项")"
@@ -756,7 +808,7 @@ if [ "$OFFLINE" = "1" ]; then
             echo "  2) $(_t "Skip, keep current version" "跳过，保留当前版本")"
             echo ""
             printf "$(_t "Select [1/2, default 2]: " "请选择 [1/2，默认 2]: ")"
-            read -r _agh_ovr || true
+            read_input _agh_ovr || true
             _agh_ovr=${_agh_ovr:-2}
             if [ "$_agh_ovr" = "1" ]; then
                 if install_agh_from_local "$AGH_PKG"; then
@@ -826,7 +878,7 @@ elif [ -f "$AGH_BIN" ]; then
     printf "$(_t "Select [1/2, default 2]: " "请选择 [1/2，默认 2]: ")"
     # `|| true`：set -e 下 stdin 为 EOF（非交互/管道）时 read 返回非 0 会静默终止整个安装
     # `|| true` guards against set -e killing the install when stdin is EOF (non-interactive).
-    read -r CHOICE || true
+    read_input CHOICE || true
     CHOICE=${CHOICE:-2}
 
     if [ "$CHOICE" = "1" ]; then
@@ -895,7 +947,7 @@ if [ "$DASH_INSTALLED" = "1" ]; then
     echo "  2) $(_t "Skip, keep the current version" "跳过，保留当前版本")"
     echo ""
     printf "$(_t "Select [1/2, default 1]: " "请选择 [1/2，默认 1]: ")"
-    read -r _dash_choice || true
+    read_input _dash_choice || true
     _dash_choice=${_dash_choice:-1}
     if [ "$_dash_choice" = "2" ]; then
         log "$(_t "Skipped the panel install — keeping the currently installed version" "已跳过面板安装 —— 保留当前版本")"
@@ -987,13 +1039,17 @@ if [ -f "$LOCAL_FILES/luci/controller/adguardhome.lua" ]; then
         echo "  2) $(_t "Delete local project then re-download from GitHub" "删除本地项目后从 GitHub 重新下载")"
         echo ""
         printf "$(_t "Select [1/2, default 1]: " "请选择 [1/2，默认 1]: ")"
-        read -r SRC_CHOICE || true
+        read_input SRC_CHOICE || true
         SRC_CHOICE=${SRC_CHOICE:-1}
     fi
 
     if [ "$SRC_CHOICE" = "2" ]; then
-        log "$(_t "Deleting local project directory: $PROJECT_ROOT" "删除本地项目目录: $PROJECT_ROOT")"
-        rm -rf "$PROJECT_ROOT"
+        # 防御：管道运行（curl ... | sh）下不存在磁盘上的项目目录，绝不删除任何东西。
+        # Guard: under a piped run there is no on-disk project dir — never delete anything.
+        if [ -n "$PROJECT_ROOT" ] && [ -d "$PROJECT_ROOT" ]; then
+            log "$(_t "Deleting local project directory: $PROJECT_ROOT" "删除本地项目目录: $PROJECT_ROOT")"
+            rm -rf "$PROJECT_ROOT"
+        fi
         do_github_download
     else
         log "$(_t "Copying local files..." "使用本地文件复制...")"

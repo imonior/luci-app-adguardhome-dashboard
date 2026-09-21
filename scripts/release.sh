@@ -1,9 +1,9 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
 # Release orchestrator: run the full pre-push preflight check, then build the
-# downloadable project tarball (via scripts/make_package.sh).
+# offline installer tarball (via scripts/make_package.sh).
 #
-# 发布编排器：先跑「推送前完整检查」，再构建可下载的整项目压缩包
+# 发布编排器：先跑「推送前完整检查」，再构建离线安装包
 # （构建本身委托给 scripts/make_package.sh）。
 #
 # Usage / 用法:
@@ -202,7 +202,7 @@ if [ "$FAIL" -ne 0 ]; then
     printf '\nRefusing to build package with failing preflight checks.\n' >&2
     exit "$FAIL"
 fi
-hdr "Build package / 构建整项目压缩包"
+hdr "Build package / 构建离线安装包"
 if [ -f scripts/make_package.sh ]; then
     sh scripts/make_package.sh || exit $?
 else

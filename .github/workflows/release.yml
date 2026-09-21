@@ -63,6 +63,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
+          # 撤回重发（删 tag 后重推同名 tag）时旧 Release 仍在，先删除再重建，
+          # 否则 gh release create 会以 "release already exists" 失败。
+          # A re-pushed tag (withdraw & re-release) leaves the previous release in
+          # place; remove it first so the recreation is idempotent. Without
+          # --cleanup-tag only the release is removed, never the git tag.
+          gh release delete "$TAG" --yes 2>/dev/null || echo "no existing release for $TAG (first publish)"
           # Release body is bilingual: English first (default), Chinese after.
           NOTES=$(cat <<'EOF'
           Offline install: download the tarball below, extract it, then run

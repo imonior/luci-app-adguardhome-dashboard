@@ -14,8 +14,10 @@
 ### 一键安装（推荐）
 
 ```sh
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh | sh
 ```
+
+> 用管道把脚本喂给 `sh`（而不是 `sh -c "$(curl …)"`）：后者把整个安装脚本当作**单个命令行参数**传入，脚本体积一旦超过系统的单参数长度上限，就会在真正执行前中断。交互提问会自动从终端读取，选择步骤不受影响。
 
 安装脚本分两步执行：
 
@@ -50,7 +52,7 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardho
 
 ```sh
 # 镜像源（URL 前缀）
-GITHUB_PROXY=https://ghfast.top/ sh -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh | GITHUB_PROXY=https://ghfast.top/ sh
 # 全量代理服务器（系统代理型）
 GITHUB_PROXY=proxy|http://127.0.0.1:7890 sh install.sh
 ```
@@ -100,7 +102,7 @@ sh scripts/install.sh
 ## 卸载 / Uninstall
 
 ```sh
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/uninstall.sh)"
+curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/uninstall.sh | sh
 ```
 
 ---
@@ -267,7 +269,7 @@ sha256sum -c checksums.sha256
 
 ```sh
 # 换用其它代理后重跑
-GITHUB_PROXY=https://ghfast.top/ sh -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh)"
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/scripts/install.sh | GITHUB_PROXY=https://ghfast.top/ sh
 # 或直接直连 raw.githubusercontent.com（绕过镜像缓存）
 curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashboard/main/files/view/dashboard.js -o /www/luci-static/resources/view/adguardhome/dashboard.js
 ```
@@ -371,8 +373,10 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
   - **修复面板自升级「点了没反应」**（即「检测到新版、但日志空白且未升级」）：生成的升级脚本 stderr 原先落在 HTTP 连接上、随连接一起丢弃，导致任何解析/启动失败都毫无痕迹。现在两个生成脚本（核心升级 + 面板升级）都把 stderr 并入执行日志，面板也改为检查 RPC 的 `success` 字段而非只看 HTTP 200——启动失败会弹出真实错误提示，不再假报「升级已启动」
   - **防旧视图自修复**：视图 JS 现在内嵌 `DASHBOARD_VIEW_VERSION`，渲染时与服务端下发版本比对；不一致即说明浏览器在跑缓存的旧视图（LuCI 的 view 模块按 URL 缓存在 localStorage / HTTP 缓存中——这正是升级 + 刷新后界面仍残留旧内容的原因），面板会自动清除这些缓存视图项并硬重载一次（sessionStorage 防重载死循环）。此后升级无需再手动清浏览器存储
   - **出口 IP / 地区探测更健壮**：geo 探测端点由 4 个增至 10 个（新增 ipapi.co、api.myip.com、extreme-ip-lookup.com、checkip.amazonaws.com、ifconfig.me、icanhazip.com 及纯 IP 服务），每个端点重试 1 次，单次 `--connect-timeout 4 --max-time 6`，总耗时上限 25s；返回值带上「已尝试的端点」列表，失败时界面直接显示，便于诊断
-  - **发布工具链**：新增 `scripts/release.sh` 发布编排器——一条命令完成推送前完整检查（`manifest.json` / 视图 JS 常量 / 两份 README 的版本一致性、双语变更记录条目、shell + JS + Lua 代码语法、`checksums.sha256` 指纹、`changes_package/` 同步）并构建整项目压缩包。发布工作流在构建前以 `--check --strict` 调用它，并新增 runner 侧安装 Lua（runner 镜像不含 Lua，此前导致 Lua 语法门禁静默失效）与完整历史 checkout（保证 tag / 版本交叉核对能取到 tag）
-  - 离线包现在同时附带两份 README、`LICENSE` 与 `DEVELOPMENT.md`，解压后的目录就是完整项目
+  - **发布工具链**：新增 `scripts/release.sh` 发布编排器——一条命令完成推送前完整检查（`manifest.json` / 视图 JS 常量 / 两份 README 的版本一致性、双语变更记录条目、shell + JS + Lua 代码语法、`checksums.sha256` 指纹、`changes_package/` 同步）并构建离线安装包。发布工作流在构建前以 `--check --strict` 调用它，并新增 runner 侧安装 Lua（runner 镜像不含 Lua，此前导致 Lua 语法门禁静默失效）与完整历史 checkout（保证 tag / 版本交叉核对能取到 tag）
+  - Release 资产保持为**精简的离线安装包**（仅含可部署文件 + 安装脚本 + manifest / 校验清单）；完整项目源码由 Release 页面自动附带的 *Source code* 归档提供，**不再**把 README / LICENSE 等文档塞进安装包
+  - **一键安装命令改为管道形态**——由 `sh -c "$(curl …)"` 改为 `curl -fsSL <url> | sh`。原写法会把整个脚本展开成**单个 argv**，脚本一旦超过单参数上限就会以 `argument list too long` 在执行前中断；改用 stdin 管道则完全没有长度上限（也不需要临时文件）。安装脚本已适配该调用方式：交互读取统一走 `read_input` helper（脚本自身来自 stdin 时改读 `/dev/tty`，否则裸 `read` 会**吞掉脚本的下一行**），交互判据统一收敛到与读取共用的 `_is_interactive` 谓词，因此管道运行仍可正常提问。`sh install.sh`（以及 `printf '1\n' | sh install.sh`）行为完全不变。脚本来自 stdin 时还会清空「本地项目路径」，避免「删除本地副本后重新下载」分支把路径解析成当前目录的上级
+  - `DEVELOPMENT.md` 发布章节重写以匹配当前流程（四处同步版本号、重算校验清单、`sh scripts/release.sh --check`、CI `--check --strict`）
 
 - **v2.5.8**
   - **离线安装包**：每个 Release 现在都附带自包含的 tar.gz（tag 推送时由 `scripts/make_package.sh` + 发布工作流自动构建）。下载、解压、运行 `scripts/install.sh` 即可；包内 `OFFLINE_PACKAGE` 标记会关闭**所有**联网动作（geo 探测、连接选择、在线版本检查、文件下载）
