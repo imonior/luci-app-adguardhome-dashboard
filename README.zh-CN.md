@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.9**
+**v2.5.10**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -368,6 +368,10 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.5.10**
+  - **修复面板自升级必然在 LMO 校验处中止**：生成的升级脚本用 `od -An -tx1` 提取 `.lmo` 末尾字节的十六进制，但 OpenWrt 的 BusyBox **没有 `od`**（install.sh 的端序判定注释其实早就写明了这一点）。`2>/dev/null` 把 `od: not found` 吞掉、摘要恒为空，于是**任何合法 `.lmo` 都校验失败**——升级回滚并报 `[verify] LMO magic bad`。现改为用 `sha256_of`（本就强制依赖）对末 4 字节求摘要、与 `LMO\0` 的已知 sha256 比对；零新增依赖，摘要为空时按失败处理（fail-closed）
+  - ⚠️ **≤ 2.5.9 的路由器无法通过面板自升级升到本版**——损坏的校验器位于**已部署**的 controller 里（由它生成升级脚本），面板路径无法自我修复。请先跑一次 install.sh 一键命令（直接下载部署 2.5.10）；从 2.5.10 起，面板自升级恢复正常
 
 - **v2.5.9**
   - **修复面板自升级「点了没反应」**（即「检测到新版、但日志空白且未升级」）：生成的升级脚本 stderr 原先落在 HTTP 连接上、随连接一起丢弃，导致任何解析/启动失败都毫无痕迹。现在两个生成脚本（核心升级 + 面板升级）都把 stderr 并入执行日志，面板也改为检查 RPC 的 `success` 字段而非只看 HTTP 200——启动失败会弹出真实错误提示，不再假报「升级已启动」

@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.5.9**
+**v2.5.10**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -376,6 +376,10 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.5.10**
+  - **Fixed panel self-upgrade always aborting at the LMO check**: the generated upgrade runner hex-dumped the `.lmo` tail with `od -An -tx1`, but OpenWrt's BusyBox ships **no `od`** (install.sh's own byte-order comment has said exactly that all along). `2>/dev/null` swallowed `od: not found`, the digest stayed empty, and **every valid `.lmo` failed verification** — the upgrade rolled back with `[verify] LMO magic bad`. The magic check now hashes the last 4 bytes with `sha256_of` (already a hard dependency of the runner) and compares against the known digest of `LMO\0`; no new dependency, fail-closed on an empty digest
+  - ⚠️ **Routers on ≤ 2.5.9 cannot self-upgrade to this version from the panel** — the broken verifier lives in the *deployed* controller that generates the runner, so the in-panel path cannot repair itself. Run the install.sh one-liner once (it downloads and deploys 2.5.10 directly); from 2.5.10 on, panel self-upgrade works again
 
 - **v2.5.9**
   - **Fixed the panel self-upgrade silently doing nothing** (the "new version detected, but the log stays empty and nothing upgrades" bug): the generated upgrade script's stderr used to land on the HTTP socket and vanish with the connection, so any parse/startup failure left no trace at all. Both generated runners (core + panel) now redirect stderr into the execution log, and the dashboard checks the RPC `success` field instead of trusting HTTP 200 — a failed launch now raises a real error notification instead of a false "upgrade started" banner

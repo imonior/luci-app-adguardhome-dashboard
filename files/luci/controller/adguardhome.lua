@@ -1174,8 +1174,18 @@ dl_disp() {
     add("  [ \"$v_sz\" -ge \"$v_min\" ] 2>/dev/null || { echo \"   [verify] size $v_sz < $v_min: $v_path\" >> \"$LOG\"; return 1; }")
     add("  case \"$v_kind\" in")
     add("    lmo)")
-    add("      v_hex=$(tail -c 4 \"$v_path\" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d '[:space:]')")
-    add("      [ \"$v_hex\" = \"4c4d4f00\" ] || { echo \"   [verify] LMO magic bad: $v_path ($v_hex)\" >> \"$LOG\"; return 1; }")
+    -- ⚠ 禁止用 od 做字节校验：OpenWrt 的 BusyBox 没有 od（install.sh 的端序判定注释
+    --   早已写明「有 hexdump 而没有 od」），`2>/dev/null` 会把 "od: not found" 吞掉，
+    --   v_hex 恒为空 → 任何合法 .lmo 都必然校验失败（v2.5.8/2.5.9 面板自升级 P0）。
+    --   改用本脚本已强依赖的 sha256_of：对末 4 字节求摘要，与 "LMO\0" 的 sha256 比对。
+    --   Never verify bytes with od here: OpenWrt's BusyBox ships no od (see the
+    --   byte-order comment in install.sh), 2>/dev/null hides "od: not found", the
+    --   digest stays empty and every valid .lmo fails. Hash the tail with sha256_of
+    --   (already a hard dependency) and compare against the known digest of "LMO\0".
+    add("      tail -c 4 \"$v_path\" > \"$v_path.mg\" 2>/dev/null")
+    add("      v_magic=$(sha256_of \"$v_path.mg\")")
+    add("      rm -f \"$v_path.mg\"")
+    add("      [ \"$v_magic\" = \"a59288c31ccf3adb130ebef49d5815bd6c64e0ba6a93b6a17aeca9a9ba41432f\" ] || { echo \"   [verify] LMO magic bad: $v_path\" >> \"$LOG\"; return 1; }")
     add("      ;;")
     add("    lua)")
     add("      grep -q 'function' \"$v_path\" 2>/dev/null || { echo \"   [verify] lua no 'function': $v_path\" >> \"$LOG\"; return 1; }")
