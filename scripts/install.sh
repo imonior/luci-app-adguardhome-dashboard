@@ -1188,7 +1188,6 @@ log "  ✓ $(_t "Content verification passed (sha256 fingerprint + semantic feat
 # ── Back up currently-installed files (kept consistent with the panel-upgrade two-phase commit) ──
 # 备份当前安装的文件（与面板升级的两阶段提交保持一致）
 TS=$(date '+%Y%m%d_%H%M%S' 2>/dev/null || date +%s 2>/dev/null || echo 0)
-BACKUP_DIR="/root/agh_backup_install_${TS}"
 
 # Backup targets: the existing files that map exactly to the cleanup/deploy below
 # 备份目标：与下面清理/部署完全对应的现有文件
@@ -1201,6 +1200,24 @@ BACKUP_PAIRS="
 /www/luci-static/resources/view/adguardhome/dashboard.js|view/adguardhome/dashboard.js
 /usr/share/adguardhome-dashboard/manifest.json|adguardhome-dashboard/manifest.json
 "
+
+# The backup type must describe WHAT is being overwritten. A backup directory is only ever
+# populated when panel files already exist, i.e. this run is a panel UPGRADE — a fresh install
+# has nothing to copy (it only logs "Fresh install detected" below). Hard-coding "install" made
+# every upgrade show up as an install in the panel's backup manager.
+# 备份类型必须描述「被覆盖的是什么」：只有已存在面板文件时才会写入备份目录，也就是本次运行
+# 本质是一次面板「升级」（全新安装无内容可备份，只打印下面的 "Fresh install detected"）。
+# 此前固定命名 install，导致每次升级在面板「备份管理」里都显示为「安装」。
+_existing_panel=0
+for pair in $BACKUP_PAIRS; do
+    _p_exist=$(echo "$pair" | cut -d'|' -f1)
+    if [ -f "$_p_exist" ]; then _existing_panel=$((_existing_panel + 1)); fi
+done
+if [ "$_existing_panel" -gt 0 ]; then
+    BACKUP_DIR="/root/agh_backup_dashboard_${TS}"
+else
+    BACKUP_DIR="/root/agh_backup_install_${TS}"
+fi
 
 _backup_count=0
 for pair in $BACKUP_PAIRS; do
@@ -1218,7 +1235,7 @@ done
 # 注意：install 不备份 AdGuardHome 核心二进制，核心安装/升级的回滚由 AGH 官方安装脚本和核心升级流程单独管理
 
 if [ "$_backup_count" -gt 0 ]; then
-    log "$(_t "Reinstall detected: backed up $_backup_count existing panel file(s) to: $BACKUP_DIR" "检测到非首次安装：已备份 $_backup_count 个现有面板文件至: $BACKUP_DIR")"
+    log "$(_t "Panel upgrade detected: backed up $_backup_count existing panel file(s) to: $BACKUP_DIR" "检测到面板升级：已备份 $_backup_count 个现有面板文件至: $BACKUP_DIR")"
 
     # Generate restore.sh: one-click restore to the pre-install state (panel files only, no AGH core)
     # 生成 restore.sh：用户可一键恢复到本次安装前的状态（仅面板文件，不含 AGH 核心）

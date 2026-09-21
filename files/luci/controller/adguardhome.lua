@@ -1422,6 +1422,14 @@ function list_backups()
     for line in handle:lines() do
         local name = line:match("^.+/" .. BACKUP_PREFIX .. "(.+)$") or ""
         local btype = name:match("^([a-z]+)_") or "unknown"
+        -- 兼容历史命名：install.sh 只在「已存在旧面板文件」时才创建备份目录（全新安装只打印
+        -- "Fresh install detected"，不会产生任何备份），因此历史上所有 agh_backup_install_*
+        -- 本质都是面板升级，统一按面板升级展示。目录名保持原样，restore.sh / 删除 / 恢复均不受影响。
+        -- Legacy naming: install.sh only ever creates a backup dir when panel files already exist
+        -- (a fresh install just logs "Fresh install detected" and writes no backup), so every
+        -- historical agh_backup_install_* is in fact a panel upgrade — report it as one. The
+        -- directory name is left untouched; restore.sh / delete / restore are unaffected.
+        if btype == "install" then btype = "dashboard" end
         -- 时间戳在 <type>_ 前缀之后（如 install_20260826_123501），精确匹配 YYYYMMDD_HHMMSS，并去掉可能带入的前导分隔符 / The timestamp sits after the <type>_ prefix (e.g. install_20260826_123501); match YYYYMMDD_HHMMSS precisely and strip any leading separator
         local ts_raw = name:match("(%d%d%d%d%d%d%d%d_%d%d%d%d%d%d)$")
             or name:match("([0-9_%-]+)$") or ""

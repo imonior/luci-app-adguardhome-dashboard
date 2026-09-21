@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.1**
+**v2.6.2**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashbo
 1. **AdGuard Home 核心** — 检测 `/opt/AdGuardHome/AdGuardHome` 是否已安装，未安装则调用官方脚本自动安装；已安装则可选择覆盖安装（自动停止运行中的服务）或跳过
 2. **LuCI Dashboard** — 从 GitHub 下载菜单注册、Lua Controller、JS View、翻译等文件及 `checksums.sha256` 到临时目录，先做 **sha256 内容指纹校验**（命中代理缓存旧版立即中止并提示换代理），再部署到系统对应位置
 
-> install.sh 在覆盖前会自动把现有的面板文件（含 `manifest.json`）备份到 `/root/agh_backup_install_<ts>/`，并在备份目录内生成 `restore.sh`。万一安装失败或想回滚到旧版面板，执行 `sh /root/agh_backup_install_<ts>/restore.sh` 即可（仅恢复面板文件，不动 AGH 核心二进制）。
+> install.sh 在覆盖前会自动把现有的面板文件（含 `manifest.json`）备份到 `/root/agh_backup_dashboard_<ts>/`，并在备份目录内生成 `restore.sh`。万一安装失败或想回滚到旧版面板，执行 `sh /root/agh_backup_dashboard_<ts>/restore.sh` 即可（仅恢复面板文件，不动 AGH 核心二进制）。只有已存在面板文件时才会创建备份——即**全新安装不产生任何备份**，install.sh 备份下来的一定是**升级**前的状态。
 
 ### 国内加速 / Proxy
 
@@ -121,9 +121,9 @@ curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashbo
 - **面板自升级**：检查面板版本（读 `manifest.json`） → 一键升级（在线下载 7 个面板文件（含 manifest.json）覆盖本地），无需手动上传
 - **两阶段提交 + 自动回滚**：核心升级和面板升级都采用「下载到临时目录 + 完整性校验 → 备份 + 原子 mv 覆盖」模式，任一步骤失败自动从备份还原已部署文件
 - **完整性校验（双重防线）**：① 类型校验 lmo magic `LMO\0` / lua 含 `function` / js 含 `view.extend` / po 含 `msgid`，防止空文件 / 404 HTML / 截断；② **sha256 内容指纹**：install 与面板升级都先下载 `checksums.sha256`，对面板文件逐一比对 sha256，任何与发布清单不一致的内容（尤其是代理/CDN 缓存的旧版本）都会被拦截并中止升级，避免装上残缺面板
-- **备份管理**：列出 `/root/agh_backup_*` 所有备份目录（install/core/dashboard 三类），显示类型/时间戳/文件数/大小/含核心/含 restore.sh；支持一键恢复（仅 install/dashboard 类备份有 restore.sh）、显示恢复命令、删除备份释放空间
+- **备份管理**：列出 `/root/agh_backup_*` 所有备份目录（dashboard/core 两类），显示类型/时间戳/文件数/大小/含核心/含 restore.sh；支持一键恢复（仅 dashboard 类备份有 restore.sh）、显示恢复命令、删除备份释放空间
 - **install 自带备份**：install.sh 部署前自动备份现有面板文件（含 manifest.json）+ 生成 restore.sh，与面板升级的备份机制完全一致
-- **国际化支持**：中英文自动切换，基于 LuCI 系统语言设置（139 条翻译；每条字典项都被引用，每个 `T()` 调用都有词条）
+- **国际化支持**：中英文自动切换，基于 LuCI 系统语言设置（144 条翻译；每条字典项都被引用，每个 `T()` 调用都有词条）
 - **跨平台**：OpenWrt / ImmortalWrt / iStoreOS
 
 ---
@@ -278,13 +278,14 @@ curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashbo
 
 ## 备份与恢复 / Backup & Restore
 
-### 三类备份目录
+### 两类备份目录
 
 | 类型 | 产生时机 | 路径 | 含 restore.sh | 恢复内容 |
 |------|------|------|:---:|------|
-| install | 安装/更新面板 | `/root/agh_backup_install_<ts>` | ✓ | 面板文件（含 manifest.json，不动 AGH 核心） |
-| dashboard | 面板自升级 | `/root/agh_backup_dashboard_<ts>` | ✓ | 面板文件（含 manifest.json，不动 AGH 核心） |
-| core | AGH 核心升级 | `/root/agh_backup_core_<ts>` | ✗ | 仅含旧二进制（手动 `cp` 恢复） |
+| dashboard（面板升级） | 面板「升级面板」按钮 **或** 在已安装面板的机器上跑 install.sh（一键命令 / 离线包） | `/root/agh_backup_dashboard_<ts>` | ✓ | 面板文件（含 manifest.json，不动 AGH 核心） |
+| core（核心升级） | AGH 核心升级 | `/root/agh_backup_core_<ts>` | ✗ | 仅含旧二进制（手动 `cp` 恢复） |
+
+> 名为 `agh_backup_install_<ts>` 的目录是同一件事的历史命名：install.sh 只在已存在面板文件时才会写备份（全新安装无内容可备份），所以那些同样都是面板升级，列表里也按面板升级展示。新备份一律使用 `dashboard` 前缀。把鼠标悬停在面板的类型列上可看到该行的原始目录名。
 
 ### 恢复方式
 
@@ -292,8 +293,7 @@ curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashbo
 
 **命令行**：
 ```sh
-# install / dashboard 类备份
-sh /root/agh_backup_install_<ts>/restore.sh
+# 面板升级类备份
 sh /root/agh_backup_dashboard_<ts>/restore.sh
 
 # core 类备份（手动）
@@ -347,7 +347,7 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 - 代理持久化文件：`/etc/adguardhome-dashboard.proxy`（存放带类型的规格，如 `proxy=mirror|https://ghfast.top/` 或 `proxy=proxy|http://127.0.0.1:7890`）
 - 执行/升级日志：`/tmp/agh_exec.log`（EXEC_LOG，含 `done` / `FAILED` 标记供前端轮询判定结果）
 - 安装日志：`/etc/adguardhome-dashboard.log`
-- 备份目录：`/root/agh_backup_{install,core,dashboard}_<ts>`（按时间戳保留，可在面板「备份管理」清理）
+- 备份目录：`/root/agh_backup_{dashboard,core}_<ts>`（按时间戳保留，可在面板「备份管理」清理）
 
 ---
 
@@ -368,6 +368,11 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.6.2**
+  - **修复「备份明明是升级、却被标成安装」**：install.sh 里备份目录名写死为 `/root/agh_backup_install_<ts>`，但它只在「已存在面板文件」时才会写备份——全新安装只打印 "Fresh install detected"，不会留下任何目录。也就是说**每一个** `agh_backup_install_*` 本质上都是一次面板升级（通过一键命令或离线包），却在面板「备份管理」里显示成「安装」。现在按「实际被覆盖的是什么」判定类型：检测到已有面板文件 → `agh_backup_dashboard_<ts>`（面板升级），否则保留 `install` 命名（此时也不会创建目录）。日志文案同步改为 "Panel upgrade detected / 检测到面板升级"
+  - **历史 `agh_backup_install_*` 目录也按面板升级展示**（BACKUP_DIR 类型映射）：既然只有覆盖已有面板才会产生备份，这些目录按定义就是面板升级。目录名保持原样——恢复、删除、`restore.sh` 均不受影响。把鼠标悬停在面板类型列上可看到原始目录名，两条产生路径仍可区分
+  - 文档：备份类型表改为两行（dashboard / core）并加历史命名说明；install.sh / 回滚路径统一为 `/root/agh_backup_dashboard_<ts>`
 
 - **v2.6.1**
   - **「面板版本」区块现在会显示浏览器实际在跑哪一份视图**：新增第三行 `浏览器已加载：vX.Y.Z`，取自写死在视图 JS 里的 `DASHBOARD_VIEW_VERSION`——这才是「浏览器此刻执行的是哪一版代码」的唯一可信来源。服务端上报的版本（`当前面板版本：` / manifest）在部署后立刻更新，但它无法反映浏览器是否还在用 localStorage / HTTP 缓存里的旧视图。两者不一致时该行变红并提示缓存原因；旁边的 **`清缓存并重载`** 按钮**常驻**（而非仅在不一致时出现——浏览器跑的是旧 JS 时新代码根本没机会执行，真卡住的人恰恰看不到红字提示）。该按钮执行真正的硬重载：清掉 localStorage 里 LuCI 缓存的 view 模块、用 `cache:'reload'` 重新拉取视图 JS、清空 Cache Storage、再 replace 到带 cache-buster 的 URL。至此「升级了界面还是旧的 / 出口 IP 一直探测不出」这类纯浏览器缓存问题可以自诊断，不再无声无息

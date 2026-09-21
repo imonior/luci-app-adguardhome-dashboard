@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.1**
+**v2.6.2**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -24,7 +24,7 @@ The install script runs in two steps:
 1. **AdGuard Home core** — detects whether `/opt/AdGuardHome/AdGuardHome` is installed; if not, it calls the official script to auto-install. If already installed, you can choose to overwrite (auto-stops the running service) or skip.
 2. **LuCI Dashboard** — downloads menu registration, Lua Controller, JS View, translations and `checksums.sha256` from GitHub into a temp dir, performs **sha256 content-fingerprint verification** (aborts immediately and prompts to switch proxy if a stale cached version is hit), then deploys to the corresponding system locations.
 
-> Before overwriting, install.sh automatically backs up the existing panel files (including `manifest.json`) to `/root/agh_backup_install_<ts>/` and generates `restore.sh` inside the backup dir. If the install fails or you want to roll back to the old panel, run `sh /root/agh_backup_install_<ts>/restore.sh` (restores panel files only, does not touch the AGH core binary).
+> Before overwriting, install.sh automatically backs up the existing panel files (including `manifest.json`) to `/root/agh_backup_dashboard_<ts>/` and generates `restore.sh` inside the backup dir. If the install fails or you want to roll back to the old panel, run `sh /root/agh_backup_dashboard_<ts>/restore.sh` (restores panel files only, does not touch the AGH core binary). A backup is only created when panel files already exist — i.e. a **fresh install produces no backup**, and what install.sh backs up is always an **upgrade**.
 
 ### Domestic acceleration / Proxy
 
@@ -121,9 +121,9 @@ curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashbo
 - **Panel self-upgrade**: check panel version (reads `manifest.json`) → one-click upgrade (downloads 7 panel files including `manifest.json` and overwrites locally), no manual upload needed
 - **Two-phase commit + auto rollback**: both core and panel upgrades use "download to temp dir + integrity check → backup + atomic mv overwrite"; any step failure auto-restores deployed files from backup
 - **Integrity verification (two layers)**: ① type check — lmo magic `LMO\0` / lua contains `function` / js contains `view.extend` / po contains `msgid`, preventing empty files / 404 HTML / truncation; ② **sha256 content fingerprint**: both install and panel upgrade first download `checksums.sha256` and compare each panel file's sha256; any content inconsistent with the release manifest (especially stale proxy/CDN caches) is blocked and the upgrade aborts, avoiding a broken panel
-- **Backup management**: lists all `/root/agh_backup_*` backup dirs (install/core/dashboard), showing type/timestamp/file count/size/contains-core/contains-restore.sh; supports one-click restore (only install/dashboard backups have restore.sh), shows restore command, and delete to free space
+- **Backup management**: lists all `/root/agh_backup_*` backup dirs (dashboard/core), showing type/timestamp/file count/size/contains-core/contains-restore.sh; supports one-click restore (only dashboard backups have restore.sh), shows restore command, and delete to free space
 - **install self-backup**: install.sh auto-backs-up existing panel files (including `manifest.json`) + generates restore.sh, identical to the panel-upgrade backup mechanism
-- **i18n support**: auto switch between Chinese and English based on LuCI system language (139 translations; every dictionary entry is referenced and every `T()` call has an entry)
+- **i18n support**: auto switch between Chinese and English based on LuCI system language (144 translations; every dictionary entry is referenced and every `T()` call has an entry)
 - **Cross-platform**: OpenWrt / ImmortalWrt / iStoreOS
 
 ---
@@ -286,13 +286,14 @@ curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashbo
 
 ## Backup & Restore
 
-### Three backup types
+### Two backup types
 
 | Type | Created when | Path | Has restore.sh | Restores |
 |------|------|------|:---:|------|
-| install | install/update panel | `/root/agh_backup_install_<ts>` | ✓ | panel files (incl. manifest.json, core untouched) |
-| dashboard | panel self-upgrade | `/root/agh_backup_dashboard_<ts>` | ✓ | panel files (incl. manifest.json, core untouched) |
+| dashboard | panel upgrade — via the panel's "Upgrade panel" button **or** install.sh (one-liner / offline package) run over an existing install | `/root/agh_backup_dashboard_<ts>` | ✓ | panel files (incl. manifest.json, core untouched) |
 | core | AGH core upgrade | `/root/agh_backup_core_<ts>` | ✗ | old binary only (manual `cp`) |
+
+> Dirs named `agh_backup_install_<ts>` are the legacy name for the same thing: install.sh only ever wrote a backup when panel files already existed (a fresh install has nothing to back up), so those are panel upgrades too and are listed as such. New backups always use the `dashboard` prefix. Hover a row's type in the panel to see its raw directory name.
 
 ### How to restore
 
@@ -300,8 +301,7 @@ curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashbo
 
 **Command line**:
 ```sh
-# install / dashboard backups
-sh /root/agh_backup_install_<ts>/restore.sh
+# panel upgrade backups
 sh /root/agh_backup_dashboard_<ts>/restore.sh
 
 # core backup (manual)
@@ -355,7 +355,7 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 - Proxy persistence file: `/etc/adguardhome-dashboard.proxy` (holds the typed spec, e.g. `proxy=mirror|https://ghfast.top/` or `proxy=proxy|http://127.0.0.1:7890`)
 - Exec/upgrade log: `/tmp/agh_exec.log` (EXEC_LOG, contains `done` / `FAILED` markers for frontend polling)
 - Install log: `/etc/adguardhome-dashboard.log`
-- Backup dirs: `/root/agh_backup_{install,core,dashboard}_<ts>` (kept by timestamp, cleanable in panel Backup management)
+- Backup dirs: `/root/agh_backup_{dashboard,core}_<ts>` (kept by timestamp, cleanable in panel Backup management)
 
 ---
 
@@ -376,6 +376,11 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.6.2**
+  - **Fixed backups being labelled "install" even when they were panel upgrades**: install.sh hard-coded `/root/agh_backup_install_<ts>`, but it only ever writes a backup when panel files already exist — a fresh install logs "Fresh install detected" and leaves no directory behind. So *every* `agh_backup_install_*` was in fact a panel upgrade (via the one-liner or the offline package) and still showed up as an "install" in the panel's backup manager. The script now decides the type from what is actually being overwritten: existing panel files found → `agh_backup_dashboard_<ts>` (panel upgrade), otherwise it keeps the `install` name (and creates nothing anyway). The log line now says "Panel upgrade detected"
+  - **Legacy `agh_backup_install_*` dirs are listed as panel upgrades too** (BACKUP_DIR type mapping): since a backup can only be produced by overwriting an existing panel, those directories are panel upgrades by construction. Their names are left untouched — restore, delete and `restore.sh` are unaffected. Hovering a row's type in the panel shows the raw directory name, so the two producers remain distinguishable
+  - Docs: the backup type table is now two rows (dashboard / core) with a legacy-naming note, and the install.sh / rollback paths use `/root/agh_backup_dashboard_<ts>`
 
 - **v2.6.1**
   - **The "Dashboard Version" block now shows which view the browser is actually running**: a third line, `Loaded in browser: vX.Y.Z`, is driven by `DASHBOARD_VIEW_VERSION` baked into the view JS — the only reliable answer to "which code is the browser executing right now". The server-reported version (`Current:` / the manifest) updates on deploy but cannot tell whether the browser is still serving a cached older view from localStorage or the HTTP cache. When the two differ, the line turns red with a tooltip explaining the cache situation, and a **`Clear Cache & Reload`** button is always present (not only on mismatch — a stale JS never runs new code, so it could never show the warning to the person who needs it). The button does a genuine hard reload that clears LuCI's cached view module in localStorage, re-fetches the view JS with `cache:'reload'`, drops Cache Storage, and replaces to a cache-busted URL. This makes browser-cache cases (the "upgraded but the UI is still old / egress IP never shows" reports) self-diagnosing instead of silent
