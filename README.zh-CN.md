@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.2**
+**v2.6.3**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -368,6 +368,12 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.6.3**
+  - **将 rpcd ACL 收紧到最小权限（删除从未使用过的通配授权）**：`files/luci/acl.json` 原先声明 `read.ubus.*:*`、`write.ubus.*:*` 与 `write.uci.*`，但面板从未真正用到这些授权。前端只通过 LuCI dispatcher（`L.url('admin/services/adguardhome/…')` + `request.get/post`）调用 controller；Lua controller 的 root 级操作是用 `os.execute` / `luci.util.exec` / `nixio.fs` 直接在 LuCI 进程内完成的，从不调用 `uci`、`ubus` 或任何 rpcd 对象。这些通配授权属于「模板带进来」的多余声明，并非功能需要。现在 `read`/`write` 改为空对象 `{}`，仅保留 `menu.d` 引用的组名，安装 / 启停 / 升级 / 卸载以及面板本身均不受影响
+    - **回滚（紧急恢复）**：将 `files/luci/acl.json` 改回旧值——`"read": { "ubus": { "*": [ "*" ] } }, "write": { "ubus": { "*": [ "*" ] }, "uci": [ "*" ] }`——本次提交的 diff 中保留了改前原内容
+  - **`install.sh` 现继承所选代理用于「强制重装 / 全新安装」核心**：选中 `proxy|<addr>` 时，核心升级 runner 过去是用直连执行官方 AdGuard Home `install.sh`（`-r` 或全新安装）——用户配置的代理只用于下载 `install.sh` 本身，脚本内部下载 AGH 二进制时仍是直连，在大陆网络下可能在 `fallback_upgrade_via_proxy` 兜底生效前就先卡住。现在 runner 在运行 `install.sh` 前设置 `HTTPS_PROXY` / `HTTP_PROXY`（镜像模式仍无法代理这一步——镜像只是 URL 前缀而非 `curl -x` 地址，因此继续保留既有兜底）
+  - `checksums.sha256` 已重新生成（发布门禁会校验此文件与 `files/luci/acl.json` 及 `files/luci/controller/adguardhome.lua` 的一致性）
 
 - **v2.6.2**
   - **修复「备份明明是升级、却被标成安装」**：install.sh 里备份目录名写死为 `/root/agh_backup_install_<ts>`，但它只在「已存在面板文件」时才会写备份——全新安装只打印 "Fresh install detected"，不会留下任何目录。也就是说**每一个** `agh_backup_install_*` 本质上都是一次面板升级（通过一键命令或离线包），却在面板「备份管理」里显示成「安装」。现在按「实际被覆盖的是什么」判定类型：检测到已有面板文件 → `agh_backup_dashboard_<ts>`（面板升级），否则保留 `install` 命名（此时也不会创建目录）。日志文案同步改为 "Panel upgrade detected / 检测到面板升级"

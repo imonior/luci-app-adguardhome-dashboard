@@ -1,12 +1,7 @@
 {
     "luci-app-adguardhome-dashboard": {
         "description": "AdGuardHome Dashboard ACL",
-        "read": {
-            "ubus": { "*": [ "*" ] }
-        },
-        "write": {
-            "ubus": { "*": [ "*" ] },
-            "uci": [ "*" ]
-        }
+        "read": {},
+        "write": {}
     }
 }

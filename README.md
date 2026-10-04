@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.2**
+**v2.6.3**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -376,6 +376,12 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.6.3**
+  - **Tightened the rpcd ACL to least privilege (removed dead wildcard grants)**: `files/luci/acl.json` declared `read.ubus.*:*`, `write.ubus.*:*` and `write.uci.*`, yet the panel never exercises any of those grants. The front end calls the controller strictly through LuCI's dispatcher (`L.url('admin/services/adguardhome/…')` + `request.get/post`), and the Lua controller does its root-level work with `os.execute` / `luci.util.exec` / `nixio.fs` directly inside the LuCI process — it never calls `uci`, `ubus`, or any rpcd object. The wildcards were a template carry-over, not a functional requirement. `read`/`write` are now empty `{}`; only the group name referenced by `menu.d` remains, so install / start-stop / upgrade / uninstall and the panel itself all keep working unchanged
+    - **Emergency rollback**: revert `files/luci/acl.json` to the previous value — `"read": { "ubus": { "*": [ "*" ] } }, "write": { "ubus": { "*": [ "*" ] }, "uci": [ "*" ] }` — the exact prior content is preserved in this commit's diff
+  - **`install.sh` now inherits the selected proxy for force / fresh core installs**: with `proxy|<addr>` selected, the core-upgrade runner used to invoke the official AdGuard Home `install.sh` (`-r`, or a fresh install) over a direct connection — the configured proxy only fetched `install.sh` itself, so the script's internal download of the AGH binary still went direct and could stall on mainland-China networks before the `fallback_upgrade_via_proxy` path kicked in. The runner now sets `HTTPS_PROXY` / `HTTP_PROXY` before running `install.sh` (the mirror type still cannot proxy this step — a mirror is a URL prefix, not a `curl -x` address — so it keeps the existing fallback)
+  - `checksums.sha256` regenerated (the release gate verifies this file against `files/luci/acl.json` and `files/luci/controller/adguardhome.lua`)
 
 - **v2.6.2**
   - **Fixed backups being labelled "install" even when they were panel upgrades**: install.sh hard-coded `/root/agh_backup_install_<ts>`, but it only ever writes a backup when panel files already exist — a fresh install logs "Fresh install detected" and leaves no directory behind. So *every* `agh_backup_install_*` was in fact a panel upgrade (via the one-liner or the offline package) and still showed up as an "install" in the panel's backup manager. The script now decides the type from what is actually being overwritten: existing panel files found → `agh_backup_dashboard_<ts>` (panel upgrade), otherwise it keeps the `install` name (and creates nothing anyway). The log line now says "Panel upgrade detected"
