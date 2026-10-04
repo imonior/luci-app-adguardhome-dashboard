@@ -778,6 +778,7 @@ fallback_upgrade_via_proxy() {
     add("svc restart >> \"$LOG\" 2>&1 || { svc stop >> \"$LOG\" 2>&1; sleep 1; svc start >> \"$LOG\" 2>&1; }")
     add("echo \"=== core upgrade done (v${OLD_VERSION:-none} -> v${NEW_VERSION:-?}) ===\" >> \"$LOG\"")
 
+    -- 固定路径（非时间戳唯一路径）：单用户家庭路由器无并发升级风险，无需保留历史 runner 脚本 / Fixed path (not timestamped): single-user home-router has no concurrent upgrade risk, no need to retain historical runner scripts
     local scrpath = "/tmp/agh_core_upgrade_runner.sh"
     local f = io.open(scrpath, "w")
     if not f then return false end
@@ -1398,6 +1399,7 @@ dl_disp() {
     add("/etc/init.d/rpcd restart 2>/dev/null >> \"$LOG\" 2>&1 || true")
     add("/etc/init.d/uhttpd restart 2>/dev/null >> \"$LOG\" 2>&1 || true")
     add("echo '=== dashboard upgrade done (v" .. get_installed_version() .. " -> upstream) ===' >> \"$LOG\"")
+    -- 固定路径（非时间戳唯一路径）：单用户家庭路由器无并发升级风险，无需保留历史 runner 脚本 / Fixed path (not timestamped): single-user home-router has no concurrent upgrade risk, no need to retain historical runner scripts
 
     local scrpath = "/tmp/agh_dashboard_upgrade_runner.sh"
     local f = io.open(scrpath, "w")

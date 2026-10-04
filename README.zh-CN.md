@@ -374,6 +374,7 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
     - **回滚（紧急恢复）**：将 `files/luci/acl.json` 改回旧值——`"read": { "ubus": { "*": [ "*" ] } }, "write": { "ubus": { "*": [ "*" ] }, "uci": [ "*" ] }`——本次提交的 diff 中保留了改前原内容
   - **`install.sh` 现继承所选代理用于「强制重装 / 全新安装」核心**：选中 `proxy|<addr>` 时，核心升级 runner 过去是用直连执行官方 AdGuard Home `install.sh`（`-r` 或全新安装）——用户配置的代理只用于下载 `install.sh` 本身，脚本内部下载 AGH 二进制时仍是直连，在大陆网络下可能在 `fallback_upgrade_via_proxy` 兜底生效前就先卡住。现在 runner 在运行 `install.sh` 前设置 `HTTPS_PROXY` / `HTTP_PROXY`（镜像模式仍无法代理这一步——镜像只是 URL 前缀而非 `curl -x` 地址，因此继续保留既有兜底）
   - **面板升级 runner 路径与核心升级统一（固定路径，非时间戳）**：两个 runner 现在都使用固定路径（`/tmp/agh_dashboard_upgrade_runner.sh` 和 `/tmp/agh_core_upgrade_runner.sh`），不再用时间戳生成唯一路径。单用户家庭路由器场景不存在并发升级风险，也无需保留历史 runner 脚本。cleanup 函数在退出时删除固定路径
+  - **固定路径添加英中双语注释**：`launch_core_upgrade` 与 `do_upgrade_dashboard` 两处均补充双语注释，说明为何使用固定路径（单用户、无并发、无历史保留）。`ts` 时间戳变量仍在作用域内，且在生成的 shell 脚本内部用于 `BACKUP_DIR` 与 `TMPDIR`——它**不是**版本号，不可删除
   - `checksums.sha256` 已重新生成（发布门禁会校验此文件与 `files/luci/acl.json` 及 `files/luci/controller/adguardhome.lua` 的一致性）
 
 - **v2.6.2**
