@@ -1200,7 +1200,7 @@ dl_disp() {
 ]==])
     add("")
     add("mkdir -p \"$TMPDIR\"")
-    add("cleanup() { rm -rf \"$TMPDIR\" 2>/dev/null; rm -f \"${TMPDIR}_runner.sh\" 2>/dev/null; }")
+    add("cleanup() { rm -rf \"$TMPDIR\" 2>/dev/null; rm -f /tmp/agh_dashboard_upgrade_runner.sh 2>/dev/null; }")
     add("trap 'cleanup' EXIT INT TERM")
     add("")
     add("verify_file() {")
@@ -1399,7 +1399,7 @@ dl_disp() {
     add("/etc/init.d/uhttpd restart 2>/dev/null >> \"$LOG\" 2>&1 || true")
     add("echo '=== dashboard upgrade done (v" .. get_installed_version() .. " -> upstream) ===' >> \"$LOG\"")
 
-    local scrpath = tmpdir .. "_runner.sh"
+    local scrpath = "/tmp/agh_dashboard_upgrade_runner.sh"
     local f = io.open(scrpath, "w")
     if not f then
         http.prepare_content("application/json")
