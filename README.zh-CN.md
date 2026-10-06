@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.3**
+**v2.6.4**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -368,6 +368,24 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.6.4**
+  - **安全：远端版本号不再拼进 shell 命令（root RCE）**：`check_update` 与 `check_dashboard_update` 过去把网络取回的版本号直接写进 `util.exec("echo '  result: latest = " .. v .. "' >> " .. EXEC_LOG)`。捕获模式 `(.-)` 与 `([^"]+)` 都放行 `'`、`$(`、反引号和 `;`，一个单引号就能闭合字面量并以 root 执行任意命令（uhttpd 以 root 运行）。这两个端点在页面加载约 1 秒后自动调用，用户填写的 `mirror|https://<host>/`、或镜像被投毒 / 链路被中间人篡改，都足以控制该值。现在 14 处日志写入全部改走 Lua `io.open(..., "a")`（`log_line` / `log_start`），日志内容只可能是字节；版本号另外还要过 `safe_version()` 白名单（`^v?%d+%.%d+%.%d+[%w%.%+%-]*$`）才会被使用
+  - **安全：持久化代理规格读取时也校验**：`/etc/adguardhome-dashboard.proxy`（权限 644）由 `get_persisted_proxy()` 读出后直接进入 `PRIMARY_PROXY`，而后者会被拼进生成的 shell 脚本头部（`PRIMARY_PROXY='...'`）与 `curl -x`。请求参数一直都过 `is_safe_spec`，唯独这条读取路径没有。现在读取后重新校验，不合法则回落直连并记日志
+  - **写类 RPC 改用 `post()`，CSRF token 校验才真正执行**：14 个 entry 原先全部用 `call()` 声明，生成的 target 不带 `post` 字段 → LuCI 的 `require_post_security()` 恒为 false → `test_post_security()`（比对 `http.formvalue("token")` 与会话 authtoken）一次都不跑，删备份 / 升级 / 写代理 / 恢复 / 执行动作 / 清日志都能被 GET 触发。读类保留 `call()`；前端 `request.post` 会自动带 token
+  - **`install.sh` 不再先毁掉已有核心再解压**：覆盖 `/opt/AdGuardHome` 时过去先 `rm -rf` 整个目录，压缩包损坏或架构不匹配时旧二进制**和** `AdGuardHome.yaml`（过滤规则、DNS 重写、DHCP、账号密码）一起消失，日志却仍打印"已回滚"。现在删除前先把二进制与 yaml 备份到 `/root/agh_backup_core_<ts>/`（与面板核心升级同一布局），三条失败路径都会真正回滚：还原文件并重新注册服务。`data/` 查询日志刻意不复制，避免撑爆小路由器的 flash
+  - **缺少 sha256 指纹清单时拒绝部署**：`checksums.sha256` 下载失败时，`install.sh` 与面板升级 runner 都会降级成三条 `grep` 语义特征（`fetchBackups` / `list_backups`），伪造内容多加一行就能通过。现在两者都把清单缺失判为失败——install.sh 换连接重试，runner 中止并回滚
+  - **`install.sh` 安装核心不再 `curl | sh`**：脚本有 `set -e` 但没有 `pipefail`，`gh_curl "$AGH_INSTALL_URL" -fsSL | sh` 的退出码取自 `sh`；curl 失败（镜像 404、TLS 错误、缓存空文件）时喂进去的是空输入，`sh` 成功返回 0，于是照常打印"安装完成"而其实什么都没装。现在先落盘、检查非空、再执行
+  - **`install.sh` 拒绝删除不安全的项目目录**：「删除本地项目后重新下载」分支过去只判断 `-n` 与 `-d`。`PROJECT_ROOT` 是 `dirname(dirname $0)` 推出来的，当 `files/` + `scripts/` 摆在 `/opt`、`/root` 或 `/mnt/...` 下时它就等于那个目录，连同 AGH 核心与备份一起被删。现在额外要求：目录名不得落在高危父目录名单内，且必须真的含有 `manifest.json` 与 `files/luci/controller/adguardhome.lua`；否则不删除任何文件，直接重新下载
+  - **修复 `delete_backup` 永远报成功**：`fs.access(dir) and false or true` 恒为 `true`（`(x and false) or true`），`ok and nil or X` 恒得到 `X`，于是 `rm -rf` 失败也报成功，还附带一条 error。改为 `ok = not fs.access(dir)`
+  - **修复核心升级失败仍报 done**：回滚分支只判断 `VERIFY_OK`。升级命令失败但旧二进制仍可执行时校验通过 → 跳过回滚 → 照样打印 `=== core upgrade done ===`，而这正是前端等待的完成标记。现在同时判断 `UPGRADE_RC`
+  - **修复「含核心」列恒为否**：`list_backups` 查的是 `<dir>/core/AdGuardHome`，而核心备份把二进制放在 `<dir>/AdGuardHome`。现在两种布局都认。核心备份同时生成 `restore.sh`（面板 `restore_backup` 要求存在），由「只能看」变为可一键恢复
+  - **修复升级按钮谎报已启动**：前端 `doUpgrade` 从不读响应（`.then(function(){...})` 连形参都没有），后端又丢弃 `launch_core_upgrade()` 的返回值、无条件返回 `success = true`。runner 写入失败现在会如实报错，而不是让日志轮询空转 300 秒。`do_upgrade` / `install_core` 返回真实状态
+  - **破坏性按钮防重复提交**：升级 / 强制重装 / 安装核心 / 升级面板 / 恢复 / 删除现在点击后立即禁用，并受 `_actionLocked()` 保护（有请求在飞或升级轮询进行中）。后端 runner 走固定路径，连点过去会覆盖正在执行的脚本并拉起第二个进程
+  - **修复代理持久化静默失败**：两处 `sendSetProxy` 调用不检查业务 `success`，`_syncRegionPolicy` 还先乐观地把 `statusData.proxy` 改掉——写入失败时界面显示一个代理，check / upgrade 却用另一个，且没有任何提示。三处现统一走 `_persistProxy()`：仅成功才更新本地状态，失败时弹出提示
+  - **修复日志轮询泄漏**：`autoRefreshLogInterval` 未纳入视图卸载清理，开启「自动刷新日志」后切到别的 LuCI 页面，3 秒一次的 `fetchLog()` 会一直跑。恢复 / 删除的错误提示改用 `ui.addNotification` 而非 `alert()`——后者阻塞主线程、会卡住 2 秒轮询
+  - **`uninstall.sh` 补删 `/usr/share/adguardhome-dashboard/`**：`install.sh` 把该目录下的 `manifest.json` 当作「本项目是否已安装」的首要判据，残留会让下次安装误报「检测到已安装 vX.Y.Z」且版本号是旧的。日志文件改到最后删除（过去删完立刻被后续 `log()` 重建，等于没清理），`log()` 改用重定向而非 `| tee -a`，`/etc` 只读时不会再让整个卸载在第一行就中止
+  - `checksums.sha256` 已重新生成；i18n 同步更新（新增 2 条词条，`.lmo` 已重编）
 
 - **v2.6.3**
   - **将 rpcd ACL 收紧到最小权限（删除从未使用过的通配授权）**：`files/luci/acl.json` 原先声明 `read.ubus.*:*`、`write.ubus.*:*` 与 `write.uci.*`，但面板从未真正用到这些授权。前端只通过 LuCI dispatcher（`L.url('admin/services/adguardhome/…')` + `request.get/post`）调用 controller；Lua controller 的 root 级操作是用 `os.execute` / `luci.util.exec` / `nixio.fs` 直接在 LuCI 进程内完成的，从不调用 `uci`、`ubus` 或任何 rpcd 对象。这些通配授权属于「模板带进来」的多余声明，并非功能需要。现在 `read`/`write` 改为空对象 `{}`，仅保留 `menu.d` 引用的组名，安装 / 启停 / 升级 / 卸载以及面板本身均不受影响

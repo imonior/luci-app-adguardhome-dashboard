@@ -371,3 +371,9 @@ msgstr "自动刷新"
 
 msgid "清空失败"
 msgstr "清空失败"
+
+msgid "处理中..."
+msgstr "处理中..."
+
+msgid "代理设置保存失败"
+msgstr "代理设置保存失败"

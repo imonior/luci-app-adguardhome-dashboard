@@ -30,6 +30,44 @@ local DASH_BRANCH = "main"
 -- 已安装版本统一从本地部署的 manifest.json 读取（单一数据源，避免与 manifest 漂移）； / Installed version is read from the locally-deployed manifest.json (single source of truth, avoids drift from the manifest);
 -- 本地文件缺失时（老版本未部署 manifest）回落到 DASHBOARD_VERSION 常量。 / Falls back to the DASHBOARD_VERSION constant when the local file is missing (older versions without a deployed manifest).
 local MANIFEST_LOCAL = "/usr/share/adguardhome-dashboard/manifest.json"
+
+-- 日志写入统一入口：全部走 Lua io.open，**绝不经过 shell**。
+-- 远端返回的版本号、代理规格等不可信内容都会写进执行日志；早先写法是
+-- util.exec("echo '  result: latest = " .. v .. "' >> " .. EXEC_LOG)，
+-- 值里只要有一个单引号就能闭合字面量并注入任意命令（uhttpd 以 root 运行）。
+-- 改用 io.open 追加后，内容无论是什么都只是字节，注入面被彻底移除。
+-- Unified log writer: everything goes through Lua io.open, NEVER through the shell.
+-- Untrusted remote values (version strings, proxy specs) end up in the execution log;
+-- the old form util.exec("echo '... " .. v .. "' >> " .. EXEC_LOG) let a single quote
+-- close the literal and inject arbitrary commands as root. io.open only ever writes bytes.
+local function log_line(s)
+    local f = io.open(EXEC_LOG, "a")
+    if not f then return false end
+    f:write(tostring(s), "\n")
+    f:close()
+    return true
+end
+
+-- 任务开始时截断日志（对应早先的 ">" 重定向）/ Truncate the log when a task starts (replaces the old ">" redirect)
+local function log_start(s)
+    local f = io.open(EXEC_LOG, "w")
+    if not f then return false end
+    f:write(tostring(s), "\n")
+    f:close()
+    return true
+end
+
+-- 版本号白名单：远端版本串会进日志、JSON 与生成的 shell 脚本，只允许纯 semver 形状
+-- （可选 v 前缀 + 预发布/构建后缀），其余一律判为无效。
+-- Version whitelist: remote version strings flow into the log, the JSON response and the
+-- generated shell script, so only plain semver shapes are accepted (optional v prefix plus
+-- prerelease/build suffix); anything else is rejected.
+local function safe_version(v)
+    if type(v) ~= "string" then return "" end
+    if v:match("^v?%d+%.%d+%.%d+[%w%.%+%-]*$") then return v end
+    return ""
+end
+
 local function get_installed_version()
     local c = util.exec("cat " .. MANIFEST_LOCAL .. " 2>/dev/null")
     if c and #c > 0 then
@@ -99,6 +137,19 @@ local function get_persisted_proxy()
         local saved = content:match("proxy%s*=%s*([^\n]*)")
         if saved then
             saved = saved:gsub("%s+$", "")
+            -- 持久化值同样必须过 is_safe_spec：请求参数（resolve_proxy / set_proxy /
+            -- proxy_test）都校验过了，唯独这条读取路径没有，而读到的值会被拼进生成的
+            -- shell 脚本头部（PRIMARY_PROXY='...'）与 curl -x 参数。文件权限 644，
+            -- 任何拿到写权限的东西都能塞进一个单引号闭合字面量。
+            -- The persisted value must pass is_safe_spec too: request parameters are
+            -- validated (resolve_proxy / set_proxy / proxy_test) but this read path was not,
+            -- and the value is interpolated into the generated shell script header
+            -- (PRIMARY_PROXY='...') and into curl -x. The file is mode 644, so anything with
+            -- write access could plant a single quote and close the literal.
+            if not is_safe_spec(saved) then
+                log_line("  [warn] persisted proxy spec rejected: " .. tostring(saved):gsub("[\r\n]", " "))
+                return ""
+            end
             return saved
         end
     end
@@ -172,7 +223,7 @@ local function try_with_proxies(url, expect_json)
         -- Build the real invocation for the current spec (mirror prefix / -x / direct).
         local tgt, pre, disp = curl_conn(PRIMARY_PROXY, target_url)
         if TRY_LOG then
-            util.exec("echo '  trying: " .. disp .. "' >> " .. TRY_LOG)
+            log_line("  trying: " .. disp)
         end
         local out = util.exec("curl -m " .. timeout .. " -fsSL " .. pre .. "'" .. tgt .. "' 2>/dev/null")
         if not out or #out < 10 then return nil end
@@ -228,20 +279,31 @@ local function find_init_script()
 end
 
 function index()
-    entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, true)
-    entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, true)
-    entry({"admin", "services", "adguardhome", "set_proxy"}, call("set_proxy"), nil, true)
-    entry({"admin", "services", "adguardhome", "proxy_test"}, call("proxy_test"), nil, true)
-    entry({"admin", "services", "adguardhome", "geo_probe"}, call("geo_probe"), nil, true)
-    entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, true)
-    entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, true)
-    entry({"admin", "services", "adguardhome", "check_dashboard_update"}, call("check_dashboard_update"), nil, true)
-    entry({"admin", "services", "adguardhome", "upgrade_dashboard"}, call("do_upgrade_dashboard"), nil, true)
-    entry({"admin", "services", "adguardhome", "backups"}, call("list_backups"), nil, true)
-    entry({"admin", "services", "adguardhome", "restore_backup"}, call("restore_backup"), nil, true)
-    entry({"admin", "services", "adguardhome", "delete_backup"}, call("delete_backup"), nil, true)
-    entry({"admin", "services", "adguardhome", "log"}, call("get_log"), nil, true)
-    entry({"admin", "services", "adguardhome", "clear_log"}, call("clear_log"), nil, true)
+    -- 读写分离：写操作一律用 post()，让 dispatcher 真正执行 CSRF token 校验。
+    -- call() 生成的 target 不带 post 字段 → require_post_security() 恒为 false →
+    -- test_post_security()（比对 http.formvalue("token") 与 session authtoken）一次都不跑，
+    -- 删备份 / 升级 / 写代理这类破坏性操作可以被 GET 触发。前端 request.post 会自动带
+    -- token（luci.js: const data = Object.assign(post ? { token: env.token } : {}, args)），
+    -- 所以改成 post() 不会打断现有调用。
+    -- Separate reads from writes: every write uses post() so the dispatcher actually runs the
+    -- CSRF token check. call() produces a target with no post field, so require_post_security()
+    -- is always false and test_post_security() (http.formvalue("token") vs the session
+    -- authtoken) never runs — destructive calls like delete/upgrade/set_proxy could be fired
+    -- with a GET. The front end's request.post always ships the token, so this is compatible.
+    entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, nil)
+    entry({"admin", "services", "adguardhome", "action"}, post("do_action"), nil, nil)
+    entry({"admin", "services", "adguardhome", "set_proxy"}, post("set_proxy"), nil, nil)
+    entry({"admin", "services", "adguardhome", "proxy_test"}, call("proxy_test"), nil, nil)
+    entry({"admin", "services", "adguardhome", "geo_probe"}, call("geo_probe"), nil, nil)
+    entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, nil)
+    entry({"admin", "services", "adguardhome", "upgrade"}, post("do_upgrade"), nil, nil)
+    entry({"admin", "services", "adguardhome", "check_dashboard_update"}, call("check_dashboard_update"), nil, nil)
+    entry({"admin", "services", "adguardhome", "upgrade_dashboard"}, post("do_upgrade_dashboard"), nil, nil)
+    entry({"admin", "services", "adguardhome", "backups"}, call("list_backups"), nil, nil)
+    entry({"admin", "services", "adguardhome", "restore_backup"}, post("restore_backup"), nil, nil)
+    entry({"admin", "services", "adguardhome", "delete_backup"}, post("delete_backup"), nil, nil)
+    entry({"admin", "services", "adguardhome", "log"}, call("get_log"), nil, nil)
+    entry({"admin", "services", "adguardhome", "clear_log"}, post("clear_log"), nil, nil)
 end
 
 function get_status()
@@ -345,9 +407,11 @@ function do_action()
 
     if action == "install_core" then
         load_proxies()
-        launch_core_upgrade(true)
+        -- 同 do_upgrade：runner 写入失败必须如实上报 / Same as do_upgrade: a failed runner
+        -- write must be reported honestly instead of always claiming success.
+        local ok = launch_core_upgrade(true)
         http.prepare_content("application/json")
-        http.write_json({ success = true })
+        http.write_json({ success = ok, error = (not ok) and "failed to write the upgrade runner script" or nil })
         return
     end
 
@@ -377,7 +441,7 @@ function do_action()
 
     local time_str = os.date("%Y-%m-%d %H:%M:%S")
     -- 单次同步动作重置清空日志文件（>），并将运行标准输出重定向回日志 / Single sync action truncates the log file (>) and redirects stdout back into the log
-    util.exec("echo '[" .. time_str .. "] Executing action: " .. action .. "' > " .. EXEC_LOG)
+    log_start("[" .. time_str .. "] Executing action: " .. action)
     local result = util.exec(cmd .. " 2>&1 | tee -a " .. EXEC_LOG)
     
     http.prepare_content("application/json")
@@ -420,7 +484,7 @@ function check_update()
     local time_str = os.date("%Y-%m-%d %H:%M:%S")
     local pinfo = (PRIMARY_PROXY ~= "") and PRIMARY_PROXY or "direct"
     TRY_LOG = EXEC_LOG
-    util.exec("echo '[" .. time_str .. "] Check AdGuardHome update (proxy=" .. pinfo .. ")' > " .. EXEC_LOG)
+    log_start("[" .. time_str .. "] Check AdGuardHome update (proxy=" .. pinfo .. ")")
 
     local latest = ""
 
@@ -428,7 +492,10 @@ function check_update()
     -- Primary: GitHub API (structured, accurate; for networks where api.github.com is reachable)
     local out_api = try_with_proxies("https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest", true)
     if out_api and #out_api > 0 then
-        latest = out_api:match('"tag_name"%s*:%s*"(.-)"') or ""
+        -- safe_version 白名单：远端版本串随后会进日志与 JSON，不是 semver 形状就丢弃
+        -- （也顺带挡掉篡改过的响应）/ safe_version whitelist: the remote version string later
+        -- reaches both the log and the JSON response, so drop anything that isn't semver-shaped
+        latest = safe_version(out_api:match('"tag_name"%s*:%s*"(.-)"') or "")
     end
 
     -- 回退：raw.githubusercontent.com 上的 CHANGELOG.md（适用于 api.github.com 被墙、但 raw 可达的网络，
@@ -437,7 +504,7 @@ function check_update()
     if latest == "" then
         local out_cl = try_with_proxies("https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/CHANGELOG.md", false)
         if out_cl and #out_cl > 0 then
-            latest = parse_agh_version_from_changelog(out_cl)
+            latest = safe_version(parse_agh_version_from_changelog(out_cl))
         end
     end
 
@@ -445,17 +512,17 @@ function check_update()
     -- Third fallback: static.adtidy.org update index (AdGuard Team's own CDN; for networks where both GitHub paths fail)
     if latest == "" then
         local idx = try_with_proxies("https://static.adtidy.org/adguardhome/release/version.json", true)
-        local v = parse_adtidy_version(idx)
+        local v = safe_version(parse_adtidy_version(idx))
         if v ~= "" then latest = v end
     end
 
     TRY_LOG = nil
     if latest == "" then
-        util.exec("echo '  result: fetch failed (no reachable connection returned valid version)' >> " .. EXEC_LOG)
+        log_line("  result: fetch failed (no reachable connection returned valid version)")
     else
-        util.exec("echo '  result: latest = " .. latest .. "' >> " .. EXEC_LOG)
+        log_line("  result: latest = " .. latest)
     end
-    util.exec("echo '=== check done ===' >> " .. EXEC_LOG)
+    log_line("=== check done ===")
     http.prepare_content("application/json")
     http.write_json({ latest_version = latest })
 end
@@ -659,6 +726,42 @@ fallback_upgrade_via_proxy() {
     add("  mkdir -p \"$BACKUP_DIR\"")
     add("  cp -a \"$BIN_PATH\" \"$BACKUP_DIR/AdGuardHome\" 2>/dev/null || cp \"$BIN_PATH\" \"$BACKUP_DIR/AdGuardHome\"")
     add("  chmod 755 \"$BACKUP_DIR/AdGuardHome\" 2>/dev/null")
+    -- 核心备份同样生成 restore.sh。此前核心备份目录里只有一个二进制，没有 restore.sh，
+    -- 而 restore_backup 要求 dir/restore.sh 存在 —— 于是列表里「含核心」为真，
+    -- 「恢复」却永远报「该备份不支持一键恢复」。
+    -- Core backups also get a restore.sh. They used to hold only the binary, while
+    -- restore_backup requires dir/restore.sh to exist — so a row showed "includes core"
+    -- yet Restore always answered "this backup does not support one-click restore".
+    local core_restore_lines = {
+        "#!/bin/sh",
+        "# 一键恢复 AdGuardHome 核心到本次升级前的版本",
+        "# 备份目录: " .. backup_dir,
+        "# 仅恢复核心二进制，不涉及面板文件",
+        "set -u",
+        "BACKUP_DIR='" .. backup_dir .. "'",
+        "BIN='" .. (bin_path or "") .. "'",
+        "",
+        "if [ ! -f \"$BACKUP_DIR/AdGuardHome\" ]; then",
+        "  echo '  (error) no backed-up binary found'",
+        "  exit 1",
+        "fi",
+        "echo \"=== Restore AdGuardHome core from $BACKUP_DIR ===\"",
+        "for s in /etc/init.d/AdGuardHome /etc/init.d/adguardhome; do",
+        "  if [ -x \"$s\" ]; then \"$s\" stop 2>/dev/null; break; fi",
+        "done",
+        "mkdir -p \"$(dirname \"$BIN\")\"",
+        "cp -a \"$BACKUP_DIR/AdGuardHome\" \"$BIN\" 2>/dev/null || cp \"$BACKUP_DIR/AdGuardHome\" \"$BIN\"",
+        "chmod 755 \"$BIN\" 2>/dev/null",
+        "echo \"  restored: $BIN\"",
+        "for s in /etc/init.d/AdGuardHome /etc/init.d/adguardhome; do",
+        "  if [ -x \"$s\" ]; then \"$s\" restart 2>/dev/null; break; fi",
+        "done",
+        "echo '=== 核心恢复完成（仅核心二进制，面板文件未受影响）==='"
+    }
+    add("  cat > \"$BACKUP_DIR/restore.sh\" <<'AGH_CORE_RESTORE_EOF'")
+    add(table.concat(core_restore_lines, "\n"))
+    add("AGH_CORE_RESTORE_EOF")
+    add("  chmod 755 \"$BACKUP_DIR/restore.sh\" 2>/dev/null")
     add("  OLD_VERSION=$(get_version \"$BIN_PATH\")")
     add("  echo \"   backed up: $BIN_PATH (v${OLD_VERSION:-unknown})\" >> \"$LOG\"")
     add("else")
@@ -756,7 +859,13 @@ fallback_upgrade_via_proxy() {
     add("  fi")
     add("fi")
     add("")
-    add("if [ \"$VERIFY_OK\" != \"1\" ]; then")
+    -- 失败判据必须同时看 UPGRADE_RC：只校验 VERIFY_OK 时，升级命令失败但旧二进制仍可执行
+    -- 的情况会被判为成功 —— 跳过回滚、重启旧版本，却照样打印 "core upgrade done"，
+    -- 前端据此提示用户「升级完成」。/ The failure test must include UPGRADE_RC: checking
+    -- VERIFY_OK alone lets a failed upgrade survive as "success" whenever the old binary
+    -- still runs — the rollback is skipped, the old build is restarted, and
+    -- "core upgrade done" is still printed, so the UI reports a completed upgrade.
+    add("if [ \"$VERIFY_OK\" != \"1\" ] || [ \"$UPGRADE_RC\" != \"0\" ]; then")
     add("  echo '>> Phase 4: rollback (verify failed)' >> \"$LOG\"")
     add("  if [ -n \"$BIN_PATH\" ] && [ -f \"$BACKUP_DIR/AdGuardHome\" ]; then")
     add("    svc stop >> \"$LOG\" 2>&1 || pkill -f AdGuardHome 2>/dev/null")
@@ -770,7 +879,7 @@ fallback_upgrade_via_proxy() {
     add("  else")
     add("    echo '   no backup to restore (was fresh install)' >> \"$LOG\"")
     add("  fi")
-    add("  echo \"=== core upgrade FAILED: verify (exit=$UPGRADE_RC) ===\" >> \"$LOG\"")
+    add("  echo \"=== core upgrade FAILED: verify=$VERIFY_OK upgrade_rc=$UPGRADE_RC ===\" >> \"$LOG\"")
     add("  exit 2")
     add("fi")
     add("")
@@ -795,9 +904,15 @@ end
 function do_upgrade()
     resolve_proxy()
     local force = post_value("force")
-    launch_core_upgrade(force == "1")
+    -- 必须把 runner 写入结果传出去：/tmp 满或只读时 launch_core_upgrade 返回 false，
+    -- 早先无条件 success=true 会让前端弹「升级任务已启动」，随后日志轮询空转 300 秒
+    -- 等一个永远不会出现的完成标记。/ The runner write result must be surfaced: when /tmp
+    -- is full or read-only launch_core_upgrade returns false, and the old unconditional
+    -- success=true made the UI claim the upgrade had started while the log poll spun for
+    -- 300 s waiting for a completion marker that never arrives.
+    local ok = launch_core_upgrade(force == "1")
     http.prepare_content("application/json")
-    http.write_json({ success = true })
+    http.write_json({ success = ok, error = (not ok) and "failed to write the upgrade runner script" or nil })
 end
 
 function set_proxy()
@@ -1116,12 +1231,12 @@ function check_dashboard_update()
     local pinfo = (PRIMARY_PROXY ~= "") and PRIMARY_PROXY or "direct"
     local manifest_url = "https://raw.githubusercontent.com/" .. DASH_REPO .. "/" .. DASH_BRANCH .. "/manifest.json"
     TRY_LOG = EXEC_LOG
-    util.exec("echo '[" .. time_str .. "] Check Dashboard update (proxy=" .. pinfo .. ")' > " .. EXEC_LOG)
+    log_start("[" .. time_str .. "] Check Dashboard update (proxy=" .. pinfo .. ")")
     local body = try_with_proxies(manifest_url, true)
     TRY_LOG = nil
     if not body or body == "" then
-        util.exec("echo '  result: fetch failed' >> " .. EXEC_LOG)
-        util.exec("echo '=== check done ===' >> " .. EXEC_LOG)
+        log_line("  result: fetch failed")
+        log_line("=== check done ===")
         http.prepare_content("application/json")
         http.write_json({
             current_version = get_installed_version(),
@@ -1131,10 +1246,13 @@ function check_dashboard_update()
         })
         return
     end
-    local ver = body:match('"version"%s*:%s*"([^"]+)"')
-    if not ver then
-        util.exec("echo '  result: parse failed' >> " .. EXEC_LOG)
-        util.exec("echo '=== check done ===' >> " .. EXEC_LOG)
+    -- 同上：版本号必须过白名单才继续（远端 manifest 可能被镜像/中间人篡改）
+    -- As above: the version must pass the whitelist before it is used (a remote manifest
+    -- can be tampered with by a mirror or a man-in-the-middle).
+    local ver = safe_version(body:match('"version"%s*:%s*"([^"]+)"') or "")
+    if ver == "" then
+        log_line("  result: parse failed")
+        log_line("=== check done ===")
         http.prepare_content("application/json")
         http.write_json({
             current_version = get_installed_version(),
@@ -1144,8 +1262,8 @@ function check_dashboard_update()
         })
         return
     end
-    util.exec("echo '  result: latest = " .. ver .. "' >> " .. EXEC_LOG)
-    util.exec("echo '=== check done ===' >> " .. EXEC_LOG)
+    log_line("  result: latest = " .. ver)
+    log_line("=== check done ===")
     local cmp = compareSemVer(get_installed_version(), ver)
     local need = (cmp and cmp < 0) or false
     http.prepare_content("application/json")
@@ -1324,7 +1442,14 @@ dl_disp() {
     add("")
     add("echo '=== Dashboard upgrade task started ===' > \"$LOG\"")
     add("echo '>> Phase 1: download & verify' >> \"$LOG\"")
-    add("download_one 'checksums.sha256' \"$CHECKSUMS\" 2>/dev/null || echo \"   [warn] checksums.sha256 下载失败，跳过 sha 校验（仅语义校验）\" >> \"$LOG\"")
+    -- 拿不到指纹清单就必须中止，不能降级：清单缺失时 check_sha 会 return 0 直接放行，
+    -- 只剩 grep 'fetchBackups' / 'list_backups' 这类弱语义指纹，伪造内容加一行即可通过。
+    -- 宁可中止并回滚，也不能部署未经 sha256 比对的文件。
+    -- A missing fingerprint manifest must abort, not degrade: check_sha returns 0 when the
+    -- manifest is absent, leaving only weak grep fingerprints ('fetchBackups' /
+    -- 'list_backups') that forged content can satisfy with a single extra line. Better to
+    -- abort and roll back than to deploy files that were never sha256-compared.
+    add("download_one 'checksums.sha256' \"$CHECKSUMS\" || fail_task 'download checksums.sha256 (refusing to deploy without sha256 verification)'")
 
     for i = 1, #DASH_FILES do
         local f = DASH_FILES[i]
@@ -1454,7 +1579,14 @@ function list_backups()
         end
         local restore = line .. "/restore.sh"
         local has_restore = fs.access(restore) and true or false
-        local has_core = fs.access(line .. "/core/AdGuardHome") and true or false
+        -- 核心备份的实际布局是 $BACKUP_DIR/AdGuardHome（见 launch_core_upgrade 的
+        -- cp -a "$BIN_PATH" "$BACKUP_DIR/AdGuardHome"），没有 core/ 子目录；早先查
+        -- dir/core/AdGuardHome 导致「含核心」列恒为否。两种布局都认，兼容历史目录。
+        -- Core backups actually lay out as $BACKUP_DIR/AdGuardHome (see the
+        -- cp -a "$BIN_PATH" "$BACKUP_DIR/AdGuardHome" in launch_core_upgrade) — there is no
+        -- core/ subdirectory; querying dir/core/AdGuardHome made the "includes core" column
+        -- always false. Both layouts are accepted, so historical dirs stay compatible.
+        local has_core = (fs.access(line .. "/AdGuardHome") or fs.access(line .. "/core/AdGuardHome")) and true or false
         -- 统计文件数和总大小 / Count files and total size
         local count_out = util.exec("find '" .. line .. "' -type f 2>/dev/null | wc -l") or "0"
         local file_count = tonumber(count_out:match("(%d+)")) or 0
@@ -1499,7 +1631,7 @@ function restore_backup()
     end
     -- 后台执行恢复脚本，输出写入执行日志（EXEC_LOG），前端 startLogPolling 轮询检测 / Run the restore script in the background; output goes to EXEC_LOG; the frontend startLogPolling polls for completion
     -- 注意：必须与前端 confirmRestore 的完成判定一致（检测 '=== Restore from /root/agh_backup'） / Note: must match the frontend confirmRestore completion check (detects '=== Restore from /root/agh_backup')
-    os.execute("echo '=== Restore from " .. dir .. " ===' > " .. EXEC_LOG)
+    log_start("=== Restore from " .. dir .. " ===")
     os.execute("sh " .. restore_script .. " >> " .. EXEC_LOG .. " 2>&1 &")
     http.prepare_content("application/json")
     http.write_json({ success = true })
@@ -1518,8 +1650,14 @@ function delete_backup()
         http.write_json({ success = false, error = "backup directory not found" })
         return
     end
-    local out = util.exec("rm -rf '" .. dir .. "' 2>&1")
-    local ok = fs.access(dir) and false or true
+    util.exec("rm -rf '" .. dir .. "' 2>&1")
+    -- 判据就是「删完还在不在」。早先写成 fs.access(dir) and false or true，
+    -- 这是恒真的：(x and false) 得到 false，(false or true) 又得到 true，
+    -- 于是 rm 失败也报成功；同理 ok and nil or X 恒为 X，成功时也会带上 error。
+    -- The test is simply "does it still exist". The old fs.access(dir) and false or true
+    -- was always true — (x and false) is false and (false or true) is true — so a failed
+    -- rm still reported success, and ok and nil or X always yielded the error string too.
+    local ok = not fs.access(dir)
     http.prepare_content("application/json")
-    http.write_json({ success = ok, error = ok and nil or "delete failed" })
+    http.write_json({ success = ok, error = (not ok) and "delete failed" or nil })
 end

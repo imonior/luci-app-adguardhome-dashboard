@@ -371,3 +371,9 @@ msgstr "Auto Refresh"
 
 msgid "清空失败"
 msgstr "Failed to clear"
+
+msgid "处理中..."
+msgstr "Working..."
+
+msgid "代理设置保存失败"
+msgstr "Failed to save the proxy setting"

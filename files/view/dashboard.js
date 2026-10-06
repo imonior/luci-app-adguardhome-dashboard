@@ -7,7 +7,7 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.6.3";
+var DASHBOARD_VIEW_VERSION = "2.6.4";
 /* 本视图 JS 的部署路径（自修复时用于绕过 HTTP 缓存重新拉取自己）
  * Deployed path of this view JS (used by the self-heal to re-fetch itself past the HTTP cache). */
 var VIEW_JS_URL = "/luci-static/resources/view/adguardhome/dashboard.js";
@@ -158,6 +158,8 @@ var _EN = {
     '清缓存并重载': 'Clear Cache & Reload',
     '浏览器正在执行的视图版本，与服务端一致': 'The view version currently executing; matches the server',
     '浏览器缓存了旧视图，界面可能仍是升级前的样子 —— 点击右侧「清缓存并重载」': 'The browser cached an old view, so the UI may still look pre-upgrade - click "Clear Cache & Reload" on the right',
+    '处理中...': 'Working...',
+    '代理设置保存失败': 'Failed to save the proxy setting',
 };
 
 var _ZH_CACHE = null;  // _isChinese 结果缓存，页面生命周期内不用重复检测 / cache _isChinese result; no re-detect within page lifetime
@@ -342,6 +344,10 @@ return view.extend({
 
     confirmRestore: function(dir, name) {
         var self = this;
+        /* 守卫：恢复期间不允许再次提交（后端 runner 走固定路径，并发会互相覆盖）。
+           Guard: no new submission while a restore is running (backend runners use fixed paths
+           and would overwrite each other). */
+        if (this._actionLocked()) return;
         if (!window.confirm(T('确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。') + '\n\n' + dir)) return;
         request.post(L.url('admin/services/adguardhome/restore_backup'), { dir: dir }).then(function(res) {
             return res.json();
@@ -351,23 +357,31 @@ return view.extend({
                 /* startLogPolling 统一处理恢复完成检测（=== Restore from /root/agh_backup / 恢复完成）+ 页面刷新 / startLogPolling uniformly handles restore-completion detection (=== Restore from /root/agh_backup / 恢复完成) + page refresh */
                 self.startLogPolling();
             } else {
-                alert((d && d.error) || T('恢复失败'));
+                /* 用 ui.addNotification 而非 alert：alert 会阻塞主线程，正在 2 秒轮询的
+                   日志查看器会被卡住，部分嵌入浏览器还会直接抑制 alert。
+                   Use ui.addNotification instead of alert: alert blocks the main thread, which
+                   stalls the 2 s log poll, and some embedded browsers suppress it entirely. */
+                ui.addNotification(null, (d && d.error) || T('恢复失败'), 'error');
             }
-        }).catch(function() { alert(T('网络错误')); });
+        }).catch(function() { ui.addNotification(null, T('网络错误'), 'error'); });
     },
 
     confirmDelete: function(dir, name) {
         var self = this;
+        if (this._actionLocked()) return;
         if (!window.confirm(T('确定删除此备份吗？此操作不可撤销。') + '\n\n' + dir)) return;
         request.post(L.url('admin/services/adguardhome/delete_backup'), { dir: dir }).then(function(res) {
             return res.json();
         }).then(function(d) {
+            /* 后端现在会如实回报（此前 ok 恒为 true，删除失败也显示成功）。
+               The backend now reports honestly (ok used to be always true, so a failed delete
+               still showed as a success). */
             if (d && d.success) {
                 self.fetchBackups();
             } else {
-                alert((d && d.error) || T('删除失败'));
+                ui.addNotification(null, (d && d.error) || T('删除失败'), 'error');
             }
-        }).catch(function() { alert(T('网络错误')); });
+        }).catch(function() { ui.addNotification(null, T('网络错误'), 'error'); });
     },
 
     fetchStatus: function() {
@@ -427,6 +441,41 @@ return view.extend({
         return request.post(url, { proxy: proxy == null ? '' : proxy }).then(function(res) {
             return res.json();
         });
+    },
+
+    /* 统一代理持久化入口：必须校验业务成功标志 —— HTTP 200 ≠ 业务成功。
+     * 后端写 /etc/adguardhome-dashboard.proxy 失败时会返回 {success:false, error:'write failed'}；
+     * 早先几处调用只 .catch() 不看 success，界面于是显示"已切换"而实际配置没变，
+     * 之后的 check / upgrade 仍走旧代理，且没有任何提示。
+     * Unified proxy persistence entry point: the business success flag must be checked.
+     * A failed backend write returns {success:false,error:'write failed'}; the old call sites
+     * only .catch()'d and never inspected success, so the UI showed "switched" while the
+     * config was untouched and later check/upgrade calls kept using the old proxy silently. */
+    _persistProxy: function(v) {
+        var self = this;
+        var spec = (v == null) ? '' : v;
+        return this.sendSetProxy(spec).then(function(d) {
+            if (d && d.success) {
+                if (self.statusData) self.statusData.proxy = spec;
+                return true;
+            }
+            ui.addNotification(null, T('代理设置保存失败') + (d && d.error ? ': ' + d.error : ''), 'error');
+            return false;
+        }).catch(function() {
+            ui.addNotification(null, T('网络错误'), 'error');
+            return false;
+        });
+    },
+
+    /* 破坏性操作统一守卫：有请求在飞、或升级/恢复日志轮询正在跑时，拒绝新的提交。
+     * 后端 runner 用的是固定路径（/tmp/agh_core_upgrade_runner.sh 等），重复提交会
+     * 覆盖正在执行的脚本并拉起第二个进程，把核心或面板文件写成半新半旧。
+     * Guard for destructive actions: reject a new submission while a request is in flight or
+     * while the upgrade/restore log poll is running. The backend runners live at fixed paths,
+     * so a repeat submission overwrites the script currently executing and spawns a second
+     * process, leaving the core or the panel files half-updated. */
+    _actionLocked: function() {
+        return !!(this._actionBusy || this.logPollInterval);
     },
 
     fetchLog: function() {
@@ -1009,8 +1058,11 @@ return view.extend({
             if (this.proxyRadioEls[i].proxy === '') { this.proxyRadioEls[i].radioEl.checked = true; break; }
         }
         if (this.proxyCustomMirrorInput) { this.proxyCustomMirrorInput.value = ''; }
-        if (this.statusData) { this.statusData.proxy = ''; }
-        this.sendSetProxy('').catch(function() {});
+        /* 不再先乐观改本地状态：持久化失败时 statusData.proxy 会与实际配置永久不一致。
+         * 成功与否由 _persistProxy 内部更新。/ No more optimistic local mutation: on a failed
+         * persist statusData.proxy would diverge from the real config forever. _persistProxy
+         * updates it only on success. */
+        this._persistProxy('');
         return true;
     },
 
@@ -1083,7 +1135,7 @@ return view.extend({
                 /* 切换代理即时持久化：让 check / upgrade 请求真正使用所选代理 / Persist proxy selection on change so check & upgrade requests actually use it */
                 if (r.radioEl) {
                     r.radioEl.addEventListener('change', function() {
-                        self.sendSetProxy(self.getProxyByKey(r.proxy)).catch(function() {});
+                        self._persistProxy(self.getProxyByKey(r.proxy));
                     });
                 }
             })(items[i]);
@@ -1107,9 +1159,7 @@ return view.extend({
                 inp.addEventListener('change', function() {
                     if (c.radio) c.radio.checked = true;
                     var v = self.specOfKey(c.radio ? c.radio.value : '');
-                    self.sendSetProxy(v).then(function(d) {
-                        if (d && d.success && self.statusData) self.statusData.proxy = v;
-                    }).catch(function() {});
+                    self._persistProxy(v);
                 });
                 inp.addEventListener('keydown', function(e) {
                     if (e.key === 'Enter' || e.keyCode === 13) { inp.blur(); }
@@ -1315,25 +1365,41 @@ return view.extend({
 
     doDashboardUpgrade: function() {
         var self = this;
-        ui.showModal(E('h4', {}, T('确认升级面板')), [
+        var title = T('确认升级面板');
+        var btn = E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px' }, title);
+        btn.addEventListener('click', function() {
+            if (btn.disabled || self._actionLocked()) return;
+            self._actionBusy = true;
+            btn.disabled = true;
+            btn.textContent = T('处理中...');
+            ui.hideModal();
+            var release = function() {
+                self._actionBusy = false;
+                btn.disabled = false;
+                btn.textContent = title;
+            };
+            self.sendDashboardUpgrade().then(function(res) {
+                /* 必须检查 success 字段：HTTP 200 不代表任务已启动（如 runner 写入失败返回 success:false）。
+                   Must check the success field: HTTP 200 does not mean the task started (e.g. runner write failure returns success:false). */
+                if (res && res.success) {
+                    ui.addNotification(null, T('升级面板任务已启动，请在下方日志查看器中查看进度'), 'info');
+                    self._actionBusy = false;
+                    self.startDashboardPolling();
+                } else {
+                    ui.addNotification(null, T('面板升级任务启动失败') + (res && res.error ? (': ' + res.error) : ''), 'error');
+                    release();
+                }
+            }).catch(function() {
+                ui.addNotification(null, T('面板升级任务启动失败'), 'error');
+                release();
+            });
+        });
+
+        ui.showModal(E('h4', {}, title), [
             E('p', {}, T('将从 GitHub 下载并部署最新版面板文件。期间 LuCI 会短暂重启。')),
             E('div', { style: 'text-align:right; margin-top:15px;' }, [
                 E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
-                E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
-                    ui.hideModal();
-                    self.sendDashboardUpgrade().then(function(res) {
-                        /* 必须检查 success 字段：HTTP 200 不代表任务已启动（如 runner 写入失败返回 success:false）。
-                           Must check the success field: HTTP 200 does not mean the task started (e.g. runner write failure returns success:false). */
-                        if (res && res.success) {
-                            ui.addNotification(null, T('升级面板任务已启动，请在下方日志查看器中查看进度'), 'info');
-                            self.startDashboardPolling();
-                        } else {
-                            ui.addNotification(null, T('面板升级任务启动失败') + (res && res.error ? (': ' + res.error) : ''), 'error');
-                        }
-                    }).catch(function() {
-                        ui.addNotification(null, T('面板升级任务启动失败'), 'error');
-                    });
-                }}, T('确认升级面板'))
+                btn
             ])
         ]);
     },
@@ -1348,11 +1414,22 @@ return view.extend({
         if (this.pollInterval) clearInterval(this.pollInterval);
         this.pollInterval = setInterval(function() {
             if (!self.rootNode || !document.body.contains(self.rootNode)) {
+                /* 视图已卸载：把三个定时器全部清掉。此前漏了 autoRefreshLogInterval，
+                   用户开启「自动刷新日志」后切到别的 LuCI 页面，3 秒一次的 fetchLog
+                   会一直跑下去，对已卸载的视图写 DOM 并持续占用 uhttpd。
+                   View detached: clear all three timers. autoRefreshLogInterval used to be
+                   missed, so with "auto refresh log" on, switching to another LuCI page left a
+                   3 s fetchLog running forever against a detached view. */
                 clearInterval(self.pollInterval);
                 self.pollInterval = null;
                 if (self.logPollInterval) {
                     clearInterval(self.logPollInterval);
                     self.logPollInterval = null;
+                }
+                if (self.autoRefreshLogInterval) {
+                    clearInterval(self.autoRefreshLogInterval);
+                    self.autoRefreshLogInterval = null;
+                    self._autoRefreshPaused = false;
                 }
                 return;
             }
@@ -1453,9 +1530,11 @@ return view.extend({
                 self.sysAccum = "";
                 self.sysLast = "";
             } else {
-                alert((d && d.error) || T('清空失败'));
+                /* 同其它提示统一走 ui.addNotification（alert 会阻塞主线程）。
+                   Consistent with the other notices (alert blocks the main thread). */
+                ui.addNotification(null, (d && d.error) || T('清空失败'), 'error');
             }
-        }).catch(function() { alert(T('网络错误')); });
+        }).catch(function() { ui.addNotification(null, T('网络错误'), 'error'); });
     },
 
     autoRefreshLogInterval: null,
@@ -1583,23 +1662,39 @@ return view.extend({
 
     doInstallCore: function() {
         var self = this;
+        var title = T('确认安装');
+        var btn = E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px' }, title);
+        btn.addEventListener('click', function() {
+            if (btn.disabled || self._actionLocked()) return;
+            self._actionBusy = true;
+            btn.disabled = true;
+            btn.textContent = T('处理中...');
+            ui.hideModal();
+            var release = function() {
+                self._actionBusy = false;
+                btn.disabled = false;
+                btn.textContent = title;
+            };
+            self.sendAction('install_core').then(function(res) {
+                if (res && res.success) {
+                    ui.addNotification(null, T('安装任务已启动，请在下方日志查看器中查看进度'), 'info');
+                    self._actionBusy = false;
+                    self.startLogPolling();
+                } else {
+                    ui.addNotification(null, T('安装任务启动失败') + (res && res.error ? ': ' + res.error : ''), 'error');
+                    release();
+                }
+            }).catch(function() {
+                ui.addNotification(null, T('安装任务启动失败'), 'error');
+                release();
+            });
+        });
+
         ui.showModal(E('h4', {}, T('下载安装 AdGuard Home')), [
             E('p', {}, T('将从 GitHub 官方脚本下载安装 AdGuard Home 核心。安装期间请保持网络连接。')),
             E('div', { style: 'text-align:right; margin-top:15px;' }, [
                 E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
-                E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
-                    ui.hideModal();
-                    self.sendAction('install_core').then(function(res) {
-                        if (res && res.success) {
-                            ui.addNotification(null, T('安装任务已启动，请在下方日志查看器中查看进度'), 'info');
-                            self.startLogPolling();
-                        } else {
-                            ui.addNotification(null, T('安装任务启动失败'), 'error');
-                        }
-                    }).catch(function() {
-                        ui.addNotification(null, T('安装任务启动失败'), 'error');
-                    });
-                }}, T('确认安装'))
+                btn
             ])
         ]);
     },
@@ -1610,21 +1705,49 @@ return view.extend({
         var desc = force
             ? T('将强制下载在线最新版本并覆盖安装当前版本。升级期间服务将中断。')
             : T('将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。');
+        var btn = E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px' }, title);
+        btn.addEventListener('click', function() {
+            if (btn.disabled || self._actionLocked()) return;
+            self._actionBusy = true;
+            btn.disabled = true;
+            btn.textContent = T('处理中...');
+            ui.hideModal();
+            var released = false;
+            var release = function() {
+                if (released) return;
+                released = true;
+                self._actionBusy = false;
+                btn.disabled = false;
+                btn.textContent = title;
+            };
+            self.sendUpgrade(force).then(function(res) {
+                /* 必须读响应并检查 success：后端 runner 写入失败会返回 success:false，
+                   而早先这里 `.then(function(){...})` 连形参都没有，一律弹「已启动」，
+                   随后日志轮询空转 300 秒等一个永远不会出现的完成标记。
+                   The response must be read and success checked: a failed runner write returns
+                   success:false. The old code did not even declare a parameter, so it always
+                   claimed the task had started and the log poll then spun for 300 s waiting for
+                   a completion marker that never arrives. */
+                if (res && res.success) {
+                    var msg = force ? T('强制重装任务已启动，请在下方日志查看器中查看进度') : T('升级任务已启动，请在下方日志查看器中查看进度');
+                    ui.addNotification(null, msg, 'info');
+                    self._actionBusy = false;
+                    self.startLogPolling();
+                } else {
+                    ui.addNotification(null, T('升级任务启动失败') + (res && res.error ? ': ' + res.error : ''), 'error');
+                    release();
+                }
+            }).catch(function() {
+                ui.addNotification(null, T('升级任务启动失败'), 'error');
+                release();
+            });
+        });
 
         ui.showModal(E('h4', {}, title), [
             E('p', {}, desc),
             E('div', { style: 'text-align:right; margin-top:15px;' }, [
                 E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
-                E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px', click: function() {
-                    ui.hideModal();
-                    self.sendUpgrade(force).then(function() {
-                        var msg = force ? T('强制重装任务已启动，请在下方日志查看器中查看进度') : T('升级任务已启动，请在下方日志查看器中查看进度');
-                        ui.addNotification(null, msg, 'info');
-                        self.startLogPolling();
-                    }).catch(function() {
-                        ui.addNotification(null, T('升级任务启动失败'), 'error');
-                    });
-                }}, title)
+                btn
             ])
         ]);
     },

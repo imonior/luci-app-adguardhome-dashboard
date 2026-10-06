@@ -703,6 +703,19 @@ install_agh_from_local() {
     # An overwrite must stop and unregister first. The check uses the DIRECTORY, not the
     # binary: a leftover dir (binary already gone) must be cleared too, or stale files
     # from the previous install would survive into the new one.
+    # ── 覆盖前先备份：核心二进制 + 配置文件 ──
+    # /opt/AdGuardHome/AdGuardHome.yaml 装着过滤规则、DNS 重写、DHCP、账号密码。
+    # 早先这里直接 rm -rf 整个目录，解压失败或架构自检失败时旧核心与配置全丢，
+    # 而日志还打印"已回滚"（实际只是又删了一遍）。只备份二进制与 yaml（与面板
+    # 核心升级的备份布局一致），不复制 data/ 下的查询日志，免得撑爆 flash。
+    # Back up BEFORE overwriting: the core binary plus its config. /opt/AdGuardHome/AdGuardHome.yaml
+    # holds filter rules, DNS rewrites, DHCP and credentials. The old code rm -rf'd the whole
+    # directory, so a failed unpack or self-check destroyed both the old core and the config
+    # while the log still said "rolled back" (it had only deleted things again). Only the binary
+    # and the yaml are copied (same layout as the panel's core backup) — data/ query logs are
+    # skipped so a small router's flash is not exhausted.
+    CORE_BACKUP="/root/agh_backup_core_$(date '+%Y%m%d_%H%M%S' 2>/dev/null || echo "t$$")"
+    CORE_BACKED_UP=0
     if [ -d "$AGH_DIR" ]; then
         if [ -f "$AGH_BIN" ]; then
             if pgrep -f 'AdGuardHome' > /dev/null 2>&1; then
@@ -717,19 +730,85 @@ install_agh_from_local() {
             log "$(_t "Unregistering the existing core service..." "正在注销旧的核心服务...")"
             ( cd "$AGH_DIR" && "$AGH_BIN" -s uninstall ) 2>/dev/null || true
         fi
+        mkdir -p "$CORE_BACKUP" 2>/dev/null || true
+        if cp -a "$AGH_BIN" "$CORE_BACKUP/AdGuardHome" 2>/dev/null; then CORE_BACKED_UP=1; fi
+        cp -a "$AGH_DIR/AdGuardHome.yaml" "$CORE_BACKUP/AdGuardHome.yaml" 2>/dev/null || true
+        if [ "$CORE_BACKED_UP" = "1" ]; then
+            # 一并生成 restore.sh：面板的 restore_backup 要求目录内有 restore.sh，
+            # 否则这份核心备份在「备份管理」里只能看、不能一键恢复。
+            # Also emit restore.sh: the panel's restore_backup requires dir/restore.sh,
+            # otherwise this core backup is listed but not restorable.
+            cat > "$CORE_BACKUP/restore.sh.tmpl" <<'AGH_CORE_RESTORE_EOF'
+#!/bin/sh
+# 一键恢复 AdGuardHome 核心到本次覆盖安装前的版本
+# One-click restore of the AGH core to its pre-overwrite state
+set -u
+BACKUP_DIR='__CORE_BACKUP__'
+BIN='__AGH_BIN__'
+if [ ! -f "$BACKUP_DIR/AdGuardHome" ]; then
+  echo '  (error) no backed-up binary found'
+  exit 1
+fi
+echo "=== Restore AdGuardHome core from $BACKUP_DIR ==="
+for s in /etc/init.d/AdGuardHome /etc/init.d/adguardhome; do
+  if [ -x "$s" ]; then "$s" stop 2>/dev/null; break; fi
+done
+mkdir -p "$(dirname "$BIN")"
+cp -a "$BACKUP_DIR/AdGuardHome" "$BIN" 2>/dev/null || cp "$BACKUP_DIR/AdGuardHome" "$BIN"
+chmod 755 "$BIN" 2>/dev/null
+if [ -f "$BACKUP_DIR/AdGuardHome.yaml" ]; then
+  cp -a "$BACKUP_DIR/AdGuardHome.yaml" "$(dirname "$BIN")/AdGuardHome.yaml" 2>/dev/null || true
+fi
+for s in /etc/init.d/AdGuardHome /etc/init.d/adguardhome; do
+  if [ -x "$s" ]; then "$s" restart 2>/dev/null; break; fi
+done
+echo '=== 核心恢复完成（仅核心二进制与配置，面板文件未受影响）==='
+AGH_CORE_RESTORE_EOF
+            # 占位符替换走重定向而非 sed -i（busybox sed 的 -i 支持不一致）
+            # Substitute via redirection rather than sed -i (busybox -i support varies)
+            sed "s|__CORE_BACKUP__|$CORE_BACKUP|g; s|__AGH_BIN__|$AGH_BIN|g" \
+                "$CORE_BACKUP/restore.sh.tmpl" > "$CORE_BACKUP/restore.sh" 2>/dev/null || true
+            rm -f "$CORE_BACKUP/restore.sh.tmpl" 2>/dev/null || true
+            chmod 755 "$CORE_BACKUP/restore.sh" 2>/dev/null || true
+            log "$(_t "Core backed up to $CORE_BACKUP (binary + AdGuardHome.yaml)" "核心已备份到 $CORE_BACKUP（二进制 + AdGuardHome.yaml）")"
+        fi
         rm -rf "$AGH_DIR"
     fi
+
+    # 真正的回滚：把备份的二进制与配置放回 /opt/AdGuardHome 并重新注册服务。
+    # 没有备份（全新安装）时只清理残留下来的坏目录。
+    # A real rollback: put the backed-up binary and config back into /opt/AdGuardHome and
+    # re-register the service. With no backup (fresh install) just clear the broken dir.
+    _il_rollback() {
+        if [ "$CORE_BACKED_UP" = "1" ] && [ -d "$CORE_BACKUP" ]; then
+            log "$(_t "Rolling back to the previous core from $CORE_BACKUP..." "正在从 $CORE_BACKUP 回滚到上一个核心...")"
+            rm -rf "$AGH_DIR"
+            mkdir -p "$AGH_DIR"
+            cp -a "$CORE_BACKUP/AdGuardHome" "$AGH_BIN" 2>/dev/null || true
+            chmod 755 "$AGH_BIN" 2>/dev/null || true
+            if [ -f "$CORE_BACKUP/AdGuardHome.yaml" ]; then
+                cp -a "$CORE_BACKUP/AdGuardHome.yaml" "$AGH_DIR/AdGuardHome.yaml" 2>/dev/null || true
+            fi
+            ( cd "$AGH_DIR" && "$AGH_BIN" -s install ) 2>/dev/null || true
+            ( cd "$AGH_DIR" && "$AGH_BIN" -s start ) 2>/dev/null || true
+            log "$(_t "Rolled back: the previous core is running again" "已回滚：上一个核心已重新运行")"
+        else
+            log "$(_t "No previous core to restore (fresh install); the incomplete directory was removed" "没有可还原的旧核心（全新安装），已清除不完整的目录")"
+            rm -rf "$AGH_DIR"
+        fi
+    }
 
     log "$(_t "Unpacking core package: $(basename "$_il_pkg")" "正在解压核心包: $(basename "$_il_pkg")")"
     mkdir -p /opt
     if ! tar -C /opt -x -z -f "$_il_pkg"; then
         log "$(_t "Unpack failed — the archive may be corrupt" "解压失败 —— 压缩包可能已损坏")"
+        _il_rollback
         return 1
     fi
 
     if [ ! -f "$AGH_BIN" ]; then
         log "$(_t "No $AGH_BIN after unpacking — unexpected archive layout" "解压后未找到 $AGH_BIN —— 压缩包结构异常")"
-        rm -rf "$AGH_DIR"
+        _il_rollback
         return 1
     fi
     chmod 755 "$AGH_BIN" 2>/dev/null || true
@@ -739,8 +818,8 @@ install_agh_from_local() {
     # Self-check by actually running it: the kernel rejects a mismatched binary
     # immediately, which catches "right file name, wrong contents".
     if ! "$AGH_BIN" --version > /dev/null 2>&1; then
-        log "$(_t "The core binary cannot run on this machine (architecture mismatch or corrupt file); rolled back" "核心二进制无法在本机执行（架构不匹配或文件损坏），已回滚")"
-        rm -rf "$AGH_DIR"
+        log "$(_t "The core binary cannot run on this machine (architecture mismatch or corrupt file) — restoring the previous core" "核心二进制无法在本机执行（架构不匹配或文件损坏）—— 正在还原上一个核心")"
+        _il_rollback
         return 1
     fi
 
@@ -901,14 +980,35 @@ elif [ -f "$AGH_BIN" ]; then
         fi
 
         log "$(_t "Reinstalling AdGuard Home from official script..." "从官方脚本重新安装 AdGuard Home...")"
-        gh_curl "$AGH_INSTALL_URL" -fsSL | sh -s -- -r
+        # 不能写成 `gh_curl ... | sh`：脚本只有 set -e 没有 pipefail，管道的退出码取自 sh，
+        # curl 一旦失败（镜像 404 / TLS 错误 / 缓存空文件）喂进去的是空输入，sh 成功返回 0，
+        # 于是照常打印"安装完成"，用户以为装好了其实什么都没发生。先落盘再执行。
+        # Must NOT be `gh_curl ... | sh`: the script has set -e but no pipefail, so the pipeline
+        # exit status comes from sh. If curl fails (mirror 404 / TLS error / cached empty file)
+        # sh receives empty input, succeeds, and we still print "installation complete" although
+        # nothing was installed. Download to disk first, then run it.
+        _agh_inst=$(mktemp 2>/dev/null || echo "/tmp/agh_official_install_$$.sh")
+        if gh_curl "$AGH_INSTALL_URL" -fsSL -o "$_agh_inst" && [ -s "$_agh_inst" ]; then
+            sh "$_agh_inst" -s -- -r || log "$(_t "The official AdGuard Home installer returned a non-zero exit code; check the output above" "官方 AdGuard Home 安装脚本返回非零退出码，请检查上面的输出")"
+        else
+            log "$(_t "Failed to download the official AdGuard Home installer — the core was NOT reinstalled" "下载官方 AdGuard Home 安装脚本失败 —— 核心未重新安装")"
+        fi
+        rm -f "$_agh_inst" 2>/dev/null || true
         log "$(_t "AdGuard Home installation complete" "AdGuard Home 安装完成")"
     else
         log "$(_t "Skipped AdGuard Home core install, keeping current version" "跳过 AdGuard Home 核心安装，保留当前版本")"
     fi
 else
     log "$(_t "AdGuard Home not detected, installing from official script..." "未检测到 AdGuard Home，开始从官方脚本安装...")"
-    gh_curl "$AGH_INSTALL_URL" -fsSL | sh
+    # 同上：先落盘再执行，避免 curl 失败被 sh 的空输入吞掉 / Same as above: download to disk
+    # first so a curl failure cannot be swallowed by sh receiving empty input.
+    _agh_inst=$(mktemp 2>/dev/null || echo "/tmp/agh_official_install_$$.sh")
+    if gh_curl "$AGH_INSTALL_URL" -fsSL -o "$_agh_inst" && [ -s "$_agh_inst" ]; then
+        sh "$_agh_inst" || log "$(_t "The official AdGuard Home installer returned a non-zero exit code; check the output above" "官方 AdGuard Home 安装脚本返回非零退出码，请检查上面的输出")"
+    else
+        log "$(_t "Failed to download the official AdGuard Home installer — the core was NOT installed" "下载官方 AdGuard Home 安装脚本失败 —— 核心未安装")"
+    fi
+    rm -f "$_agh_inst" 2>/dev/null || true
     log "$(_t "AdGuard Home installation complete" "AdGuard Home 安装完成")"
 fi
 
@@ -1000,7 +1100,17 @@ download_from_github() {
         -o "$DOWNLOAD_DIR/checksums.sha256" 2>/dev/null; then
         log "  ✓ checksums.sha256"
     else
-        log "  $(_t "Warning: checksums.sha256 download failed via '$CONNECTION_LABEL', will use semantic feature check only" "警告: checksums.sha256 经 '$CONNECTION_LABEL' 下载失败，将仅做语义特征校验")"
+        # 拿不到指纹清单就中止，不做降级：缺失时下方 [ -f checksums.sha256 ] 整段跳过，
+        # 只剩三条 grep 语义特征，伪造内容加一个 'list_backups' 就能通过。
+        # 宁可让用户换一个连接，也不能部署没有 sha256 比对过的文件。
+        # A missing fingerprint manifest aborts instead of degrading: without it the
+        # [ -f checksums.sha256 ] block below is skipped entirely and only three grep
+        # feature checks remain, which forged content satisfies with one extra line.
+        # Better to ask for another connection than deploy files never sha256-compared.
+        # 返回 1 让 do_github_download 换一个连接重试，而不是就地退出。
+        # Return 1 so do_github_download retries with another connection instead of exiting here.
+        log "$(_t "checksums.sha256 download failed via '$CONNECTION_LABEL' — refusing to deploy without sha256 verification" "警告: checksums.sha256 经 '$CONNECTION_LABEL' 下载失败 —— 拒绝在未做 sha256 校验的情况下部署")"
+        return 1
     fi
     log "$(_t "All files downloaded" "所有文件下载完成")"
     return $_fail
@@ -1046,7 +1156,26 @@ if [ -f "$LOCAL_FILES/luci/controller/adguardhome.lua" ]; then
     if [ "$SRC_CHOICE" = "2" ]; then
         # 防御：管道运行（curl ... | sh）下不存在磁盘上的项目目录，绝不删除任何东西。
         # Guard: under a piped run there is no on-disk project dir — never delete anything.
-        if [ -n "$PROJECT_ROOT" ] && [ -d "$PROJECT_ROOT" ]; then
+        #
+        # 判据只有 -n / -d 是不够的：PROJECT_ROOT 是 dirname(dirname $0) 机械推出来的，
+        # 用户把 files/ 与 scripts/ 摆在 /opt、/root、/mnt/... 下时它就等于那个目录，
+        # 选 2 会把整个目录连同里面的 AGH 核心、备份一起删掉。所以再加两道闸：
+        #   ① 目录名不得落在高危父目录名单里；
+        #   ② 必须真的带有项目标记文件（manifest.json + controller lua）。
+        # -n / -d alone is not enough: PROJECT_ROOT is derived mechanically as
+        # dirname(dirname $0), so if files/ and scripts/ sit under /opt, /root or /mnt/...,
+        # it equals that directory and option 2 would wipe it — including the AGH core and
+        # the backups inside. Two more gates: ① the path must not be a high-risk parent dir;
+        # ② the dir must actually carry the project marker files.
+        _del_risk=0
+        case "$PROJECT_ROOT" in
+            ""|/|/root|/etc|/usr|/opt|/bin|/sbin|/lib|/var|/tmp|/mnt|/overlay|/home) _del_risk=1 ;;
+        esac
+        [ -f "$PROJECT_ROOT/manifest.json" ] || _del_risk=1
+        [ -f "$LOCAL_FILES/luci/controller/adguardhome.lua" ] || _del_risk=1
+        if [ "$_del_risk" = "1" ]; then
+            log "$(_t "Refusing to delete '$PROJECT_ROOT': it is not a safe project directory, re-downloading without deleting anything" "拒绝删除 '$PROJECT_ROOT'：它不是一个安全的项目目录，改为不删除任何文件直接重新下载")"
+        elif [ -n "$PROJECT_ROOT" ] && [ -d "$PROJECT_ROOT" ]; then
             log "$(_t "Deleting local project directory: $PROJECT_ROOT" "删除本地项目目录: $PROJECT_ROOT")"
             rm -rf "$PROJECT_ROOT"
         fi
