@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.6**
+**v2.6.7**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -377,9 +377,16 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
 
+- **v2.6.7**
+  - **Fixed "Clear Cache & Reload" still not switching to the new view on Safari / router uhttpd**: v2.6.5/2.6.6 relied on `fetch(..., {cache:'reload'})` writing the fresh file back into the HTTP disk cache, then `location.reload()` expecting the navigation to pick up that entry. But `cache:'reload'` writes back asynchronously, and on Safari / router uhttpd that write is unreliable — the navigation reads the stale entry first, so the old view came back. Only DevTools "Disable cache" worked, because it skips the cache lookup entirely and therefore sends no conditional headers
+  - **The button now hot-swaps the view in place, with no dependence on the HTTP cache write-back**: it stops the old instance's polls, fetches the latest dashboard.js as TEXT with `cache: 'no-store'` (which forces the browser to fetch the real file from the server, past any cached URL variant) plus a deliberately non-matching `If-None-Match` / 1970 `If-Modified-Since`, re-evaluates that text inside this module's own closure scope to obtain the new view class, instantiates it, renders it with the data we already hold, and replaces the root node (`parentNode.replaceChild`). The old view is gone and the new one is live without a full page reload
+  - **A browser already stuck on a stale view needs one manual hard refresh to load this version** — the old button inside the stale copy cannot repair itself (same as before). Every subsequent upgrade is then handled automatically by the hot-swap
+  - Version bumped to 2.6.7; `checksums.sha256` regenerated. No new i18n strings
+
 - **v2.6.6**
   - **Fixed a v2.6.4 regression where "Upgrade dashboard" did nothing after "Check for update"**: the destructive-action guard (`_actionLocked`) returned true whenever a log-poll interval was active, and the version check starts exactly such a poll — so in the ~2–4 s window before the poll sees `=== check done ===`, clicking "Upgrade" was silently swallowed (the modal closed, no request was sent, no error shown). v2.6.2 / v2.6.3 had no such guard and upgraded normally
   - **The guard now keys only on a genuine destructive action in progress** (`_actionBusy`), not on passive log polling. Every destructive action (dashboard upgrade, core install/upgrade, restore, delete backup) now sets `_actionBusy` on start and resets it when the completion marker appears in the log (or on failure / poll timeout), so concurrent re-submission is still blocked while the spurious "check → upgrade" block is gone
+  - **Restore from backup had the same silent-silence regression and is fixed by the same change**: `confirmRestore` in v2.6.4/2.6.5 also started with `if (this._actionLocked()) return;` (v2.6.4 changelog item "Destructive buttons can no longer be double-submitted"), so a "Restore" click during the post-check poll window was swallowed exactly like "Upgrade". The backend `restore_backup` was never at fault (unchanged from v2.6.2; both dashboard and core backups ship a `restore.sh`). v2.6.6's decoupling makes "Restore" work again — no separate patch needed
   - Version bumped to 2.6.6; `checksums.sha256` regenerated. No new i18n strings
 
 - **v2.6.5**

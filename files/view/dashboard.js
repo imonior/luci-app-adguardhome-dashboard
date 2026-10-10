@@ -7,7 +7,7 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.6.6";
+var DASHBOARD_VIEW_VERSION = "2.6.7";
 /* 本视图 JS 的部署路径（自修复时用于绕过 HTTP 缓存重新拉取自己）
  * Deployed path of this view JS (used by the self-heal to re-fetch itself past the HTTP cache). */
 var VIEW_JS_URL = "/luci-static/resources/view/adguardhome/dashboard.js";
@@ -516,89 +516,103 @@ return view.extend({
         ]);
     },
 
-    /* Bypass every layer that keeps an old view alive and reload once.
-     * 绕过所有让旧视图存活的缓存层并重载一次：
-     * ① localStorage 里 LuCI 缓存的 view 模块；② HTTP 缓存里的 view JS（用 cache:'reload'
-     * 重新拉取，裸 URL 与带 ?v= 的 URL 各一次，以覆盖 LuCI 真正会请求的那个条目）；③ Cache
-     * Storage；④ replace 到带 cache-buster 的 URL。
-     * 注意 location.reload(true) 的 force 参数已被浏览器忽略，无法取代以上步骤。 */
+    /* Swap in the fresh view IN PLACE (no full page reload), so the result no longer depends on
+     * the browser writing a warmed entry back into its HTTP disk cache — which is exactly what
+     * fails on Safari / router uhttpd, and is why only DevTools "Disable cache" worked before.
+     * 原地「热替换」为最新视图（不整页重载），从而不再依赖浏览器把预热条目写回 HTTP 磁盘缓存——
+     * 那正是 Safari / 路由器 uhttpd 下失效、只有开发者工具「禁用缓存」才有效的根因。
+     * Steps / 步骤：
+     * ① fetch the latest dashboard.js as TEXT with cache:'no-store' + a forced-200 header, so the
+     *    browser MUST pull the real file from the server, never a cached copy of any URL variant
+     *    用 cache:'no-store' + 强制 200 头把最新 dashboard.js 作为文本拉取，浏览器必然从服务端取真文件，
+     *    而非任何 URL 变体的缓存副本
+     * ② re-evaluate that text inside this module's own closure scope (view/ui/request/L/T/E/dom are
+     *    all provided by LuCI to the view and are in scope here) to obtain the new view class,
+     *    instantiate it, render it with the latest data we already hold, and replace the root node
+     *    在本模块自身闭包作用域内重新求值该文本（view/ui/request/L/T/E/dom 都由 LuCI 提供给视图、此处可用）
+     *    得到新视图类，实例化后用已持有的最新数据渲染，并替换当前根节点
+     * ③ on any failure, fall back to a full reload (last resort: DevTools "Disable cache")
+     *    任一步失败则兜底整页重载（终极手段：开发者工具「禁用缓存」） */
     hardReload: function() {
+        var self = this;
+        /* stop the old instance's polls so they do not keep firing against a detached node
+         * 停掉旧实例的轮询，避免它们继续打已经脱离文档的节点 */
         try {
-            for (var _i = localStorage.length - 1; _i >= 0; _i--) {
-                var _k = localStorage.key(_i);
-                if (_k && (_k.indexOf('view:') === 0 || _k.indexOf('luci') === 0)) {
-                    try { localStorage.removeItem(_k); } catch (e) {}
-                }
-            }
+            if (self.pollInterval) { clearInterval(self.pollInterval); self.pollInterval = null; }
+            if (self.logPollInterval) { clearInterval(self.logPollInterval); self.logPollInterval = null; }
+            if (self.autoRefreshLogInterval) { clearInterval(self.autoRefreshLogInterval); self.autoRefreshLogInterval = null; }
         } catch (e) {}
 
-        /* 关键修正：必须刷新「LuCI 真正会请求的那一个」缓存条目。
-         * luci.js 加载视图模块时拼的 URL 是 base_url + 模块路径 + '.js'，并在页面里 luci.js 的 src
-         * 带 ?v= 时再追加 '?v=' + resource_version（21.02 起即有，见 luci.js:2474 / luci2102.js:2444）。
-         * 这个 ?v= 只随 LuCI 自身变化，**不随本面板升级变化**，而 HTTP 缓存以完整 URL（含 query）为键
-         * —— 于是旧的 dashboard.js 被永久命中。早先的 '?_cb=<ts>' 刷新的是一个根本没人请求的第三个
-         * 条目，按钮因此「点了没反应」，只有关掉浏览器缓存才能绕开。
-         * 这里把裸 URL 与带 ?v= 的 URL 各刷一次，两种情形都能命中真正的键。
-         * Key fix: refresh the exact cache entry LuCI will request. luci.js builds a view module URL as
-         * base_url + module path + '.js', and appends '?v=' + resource_version when the page's luci.js
-         * src carries ?v= (present since 21.02; luci.js:2474 / luci2102.js:2444). That ?v= tracks LuCI
-         * itself, NOT this panel's version, while the HTTP cache keys on the full URL (query included) —
-         * so a stale dashboard.js keeps being served. The old '?_cb=<ts>' form refreshed a third entry
-         * nobody requests, hence a button that looked dead unless browser caching was disabled.
-         * Both the bare URL and the ?v= URL are refreshed here, so either case hits the real key. */
-        var _urls = [VIEW_JS_URL];
-        try {
-            var _rv = (typeof L !== 'undefined' && L.env && L.env.resource_version) ? L.env.resource_version : '';
-            if (_rv) { _urls.push(VIEW_JS_URL + '?v=' + _rv); }
-        } catch (e) {}
+        /* these names are all in this module's closure scope (LuCI provides them to the view)
+         * 以下名字都在本模块闭包作用域内（LuCI 提供给视图） */
+        var scope = {
+            view: view,
+            ui: ui,
+            request: request,
+            L: L,
+            T: T,
+            dom: (typeof dom !== 'undefined') ? dom : null,
+            E: (typeof E !== 'undefined') ? E : null
+        };
 
-        /* 强制服务端回 200 全量内容，而不是 304：条件请求（Ctrl+F5，以及 cache:'reload' 的常规形态）
-         * 会带上 If-None-Match / If-Modified-Since，只要服务端校验器仍判「未修改」，浏览器就继续复用
-         * 缓存里的旧 body。路由器上典型成因是没有电池 RTC：重启后时钟回跳到固件编译日期，新部署的
-         * 文件 mtime 反而比缓存里的旧，uhttpd 于是回 304 —— 这正是「Ctrl+F5 毫无效果，只有禁用掉
-         * 浏览器缓存才行」的根因。这里显式带上必然不匹配的 If-None-Match 与 1970 的 If-Modified-Since，
-         * 让服务端无论如何都回 200；配合 cache:'reload' 把新 body 写回缓存条目。
-         * Force a 200 with the full body instead of a 304: a conditional request (Ctrl+F5, and the
-         * usual shape of cache:'reload') carries If-None-Match / If-Modified-Since, and as soon as the
-         * server's validator still says "not modified" the browser keeps reusing the stale cached body.
-         * On routers the classic cause is a missing battery-backed RTC: after a reboot the clock falls
-         * back to the firmware build date, so the newly deployed file's mtime is older than the cached
-         * one and uhttpd answers 304 — exactly why Ctrl+F5 did nothing and only disabling the browser
-         * cache worked. A deliberately non-matching If-None-Match plus an epoch If-Modified-Since makes
-         * the server answer 200 either way, and cache:'reload' writes the fresh body back. */
+        var _rv = (typeof L !== 'undefined' && L.env && L.env.resource_version) ? L.env.resource_version : '';
+        var _urls = [_rv ? (VIEW_JS_URL + '?v=' + _rv) : VIEW_JS_URL, VIEW_JS_URL];
         var _hdrs = {
             'If-None-Match': '"agh-force-refresh-' + Date.now() + '"',
             'If-Modified-Since': 'Thu, 01 Jan 1970 00:00:00 GMT'
         };
 
-        var _bust = new Promise(function(_resolve) {
-            var _left = _urls.length;
-            var _fin = function() { if (_left > 0 && --_left === 0) { _resolve(); } };
-            _urls.forEach(function(_u) {
-                try {
-                    fetch(_u, { cache: 'reload', credentials: 'same-origin', headers: _hdrs })
-                        .then(_fin, _fin);
-                } catch (e) { _fin(); }
-            });
-            /* 别让一次卡住的请求把重载无限期拖住 / never let a hanging request postpone the reload forever */
-            setTimeout(function() { while (_left > 0) { _fin(); } }, 3000);
-        });
-        _bust.then(function() {
-            if (window.caches && caches.keys) {
-                return caches.keys().then(function(_ks) {
-                    return Promise.all(_ks.map(function(k) { return caches.delete(k); }));
-                }).then(function() {}, function() {});
+        function _fail() { try { location.reload(); } catch (e) {} }
+
+        function _try(i) {
+            if (i >= _urls.length) { _fail(); return; }
+            try {
+                fetch(_urls[i], { cache: 'no-store', credentials: 'same-origin', headers: _hdrs })
+                    .then(function(r) { return r.text(); })
+                    .then(function(txt) {
+                        if (!txt || txt.length < 1000) { _try(i + 1); return; }
+                        _swap(txt);
+                    })
+                    .catch(function() { _try(i + 1); });
+            } catch (e) { _try(i + 1); }
+        }
+
+        function _swap(txt) {
+            try {
+                /* re-evaluate the fresh module text with our captured scope
+                 * 用捕获的作用域重新求值最新模块文本 */
+                var newClass = new Function('view', 'ui', 'request', 'dom', 'E', 'L', 'T', txt)(
+                    scope.view, scope.ui, scope.request, scope.dom, scope.E, scope.L, scope.T
+                );
+                if (!newClass) { _fail(); return; }
+                var inst = new newClass();
+                var data = self._lastData || [{}, {}];
+                var newNode = inst.render(data);
+                if (!newNode || !newNode.nodeType) { _fail(); return; }
+                if (self.rootNode && self.rootNode.parentNode) {
+                    self.rootNode.parentNode.replaceChild(newNode, self.rootNode);
+                } else {
+                    var _mc = document.getElementById('maincontent') || document.body;
+                    _mc.innerHTML = '';
+                    _mc.appendChild(newNode);
+                }
+                self.rootNode = newNode;
+                try { if (scope.ui && scope.ui.addNotification) scope.ui.addNotification(null, '已切换到最新面板视图', 'info'); } catch (e) {}
+            } catch (e) {
+                /* hot-swap failed (unexpected re-eval error) — fall back to a full page reload
+                 * 热替换失败（非常规求值错误）→ 兜底整页重载 */
+                _fail();
             }
-        }).then(function() {}, function() {}).then(function() {
-            var _u = location.href.split('#')[0];
-            location.replace(_u + (_u.indexOf('?') >= 0 ? '&' : '?') + '_aghv=' + Date.now());
-        });
+        }
+
+        _try(0);
     },
 
     render: function(data) {
         var status = data[0];
         var logData = data[1];
         this.statusData = status;
+        this._lastData = data;  // 缓存最近一次数据，供 hardReload 热替换时复用 / keep latest data for hardReload hot-swap
 
         /* Anti-stale-view self-heal: if the server's dashboard version differs from the version of
          * the JS currently executing, the browser is almost certainly running a cached older view
