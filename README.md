@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.5**
+**v2.6.6**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -376,6 +376,11 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.6.6**
+  - **Fixed a v2.6.4 regression where "Upgrade dashboard" did nothing after "Check for update"**: the destructive-action guard (`_actionLocked`) returned true whenever a log-poll interval was active, and the version check starts exactly such a poll — so in the ~2–4 s window before the poll sees `=== check done ===`, clicking "Upgrade" was silently swallowed (the modal closed, no request was sent, no error shown). v2.6.2 / v2.6.3 had no such guard and upgraded normally
+  - **The guard now keys only on a genuine destructive action in progress** (`_actionBusy`), not on passive log polling. Every destructive action (dashboard upgrade, core install/upgrade, restore, delete backup) now sets `_actionBusy` on start and resets it when the completion marker appears in the log (or on failure / poll timeout), so concurrent re-submission is still blocked while the spurious "check → upgrade" block is gone
+  - Version bumped to 2.6.6; `checksums.sha256` regenerated. No new i18n strings
 
 - **v2.6.5**
   - **Fixed "Clear Cache & Reload" having no effect — the cached view JS is now actually refreshed** (two independent causes had to be fixed together): the button re-fetched this view as `dashboard.js?_cb=<timestamp>`, but the HTTP cache keys on the full URL *including the query string*, so that only refreshed an entry nobody ever requests. LuCI loads view modules as `base_url + module path + '.js'` plus `?v=` + `resource_version` whenever the page's `luci.js` src carries `?v=` (`luci.js:2474`, present since 21.02) — and that `?v=` tracks LuCI itself, not this panel, so it never changes when the panel is upgraded. That is why a stale `dashboard.js` was served indefinitely and why disabling browser caching was the only workaround. Both the bare URL and the `?v=` URL are now re-fetched with `cache: 'reload'` (which bypasses the cache read and then writes the fresh response back), so the exact key LuCI requests is the one that gets refreshed, and the reload genuinely picks up the new view

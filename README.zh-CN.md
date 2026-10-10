@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.5**
+**v2.6.6**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -368,6 +368,11 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.6.6**
+  - **修复 v2.6.4 引入的回归：「检查更新」后点「升级面板」毫无反应**：破坏性操作守卫 `_actionLocked` 此前只要日志轮询在进行就返回 true，而「检查更新」恰恰会启动这样一个轮询 —— 于是在轮询看到 `=== check done ===` 之前的约 2–4 秒窗口里，点「升级」会被静默吞掉（模态关了、请求没发出、也没有报错）。v2.6.2 / v2.6.3 没有这道守卫，升级一直正常
+  - **守卫现在只认真正进行中的破坏性操作**（`_actionBusy`），不再认被动日志轮询。每个破坏性操作（面板升级、核心安装/升级、恢复、删除备份）都在开始时置位 `_actionBusy`，并在日志中出现完成标记（或失败 / 轮询超时）时复位，因此并发重复提交仍被拦截，而「检查→升级」的误拦截已消除
+  - 版本升至 2.6.6；重新生成 `checksums.sha256`。无新增 i18n 词条
 
 - **v2.6.5**
   - **修复「清缓存并重载」点击无效 —— 现在真正刷新了被缓存的视图 JS**（两个独立成因需一并修掉）：该按钮此前把本视图按 `dashboard.js?_cb=<时间戳>` 重新拉取，但 HTTP 缓存以**完整 URL（含 query）**为键，那只刷新了一个根本没人请求的条目。LuCI 加载视图模块的 URL 是 `base_url + 模块路径 + '.js'`，并在页面 `luci.js` 的 src 带 `?v=` 时再追加 `?v=` + `resource_version`（`luci.js:2474`，21.02 起即有）——而这个 `?v=` 只跟随 LuCI 自身、**不随本面板升级变化**，所以旧的 `dashboard.js` 被无限期命中，只能靠关闭浏览器缓存绕开。现在裸 URL 与带 `?v=` 的 URL 都会以 `cache: 'reload'` 重新拉取（该模式绕过缓存读取并把新响应写回），真正刷新的正是 LuCI 会请求的那个键，重载后即是新视图

@@ -7,7 +7,7 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.6.5";
+var DASHBOARD_VIEW_VERSION = "2.6.6";
 /* 本视图 JS 的部署路径（自修复时用于绕过 HTTP 缓存重新拉取自己）
  * Deployed path of this view JS (used by the self-heal to re-fetch itself past the HTTP cache). */
 var VIEW_JS_URL = "/luci-static/resources/view/adguardhome/dashboard.js";
@@ -346,9 +346,14 @@ return view.extend({
         var self = this;
         /* 守卫：恢复期间不允许再次提交（后端 runner 走固定路径，并发会互相覆盖）。
            Guard: no new submission while a restore is running (backend runners use fixed paths
-           and would overwrite each other). */
+           and would overwrite each other). _actionBusy is reset by startLogPolling once the
+           restore-completion marker appears in the log. */
         if (this._actionLocked()) return;
-        if (!window.confirm(T('确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。') + '\n\n' + dir)) return;
+        self._actionBusy = true;
+        if (!window.confirm(T('确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。') + '\n\n' + dir)) {
+            self._actionBusy = false;
+            return;
+        }
         request.post(L.url('admin/services/adguardhome/restore_backup'), { dir: dir }).then(function(res) {
             return res.json();
         }).then(function(d) {
@@ -357,22 +362,29 @@ return view.extend({
                 /* startLogPolling 统一处理恢复完成检测（=== Restore from /root/agh_backup / 恢复完成）+ 页面刷新 / startLogPolling uniformly handles restore-completion detection (=== Restore from /root/agh_backup / 恢复完成) + page refresh */
                 self.startLogPolling();
             } else {
-                /* 用 ui.addNotification 而非 alert：alert 会阻塞主线程，正在 2 秒轮询的
-                   日志查看器会被卡住，部分嵌入浏览器还会直接抑制 alert。
-                   Use ui.addNotification instead of alert: alert blocks the main thread, which
-                   stalls the 2 s log poll, and some embedded browsers suppress it entirely. */
+                /* 恢复启动失败：立即复位，避免守卫永久卡死 / restore failed to start: release immediately */
+                self._actionBusy = false;
                 ui.addNotification(null, (d && d.error) || T('恢复失败'), 'error');
             }
-        }).catch(function() { ui.addNotification(null, T('网络错误'), 'error'); });
+        }).catch(function() {
+            self._actionBusy = false;
+            ui.addNotification(null, T('网络错误'), 'error');
+        });
     },
 
     confirmDelete: function(dir, name) {
         var self = this;
         if (this._actionLocked()) return;
-        if (!window.confirm(T('确定删除此备份吗？此操作不可撤销。') + '\n\n' + dir)) return;
+        self._actionBusy = true;
+        if (!window.confirm(T('确定删除此备份吗？此操作不可撤销。') + '\n\n' + dir)) {
+            self._actionBusy = false;
+            return;
+        }
         request.post(L.url('admin/services/adguardhome/delete_backup'), { dir: dir }).then(function(res) {
             return res.json();
         }).then(function(d) {
+            /* 删除是短操作，请求返回即复位（无日志轮询跟踪） / delete is short; reset as soon as the request returns */
+            self._actionBusy = false;
             /* 后端现在会如实回报（此前 ok 恒为 true，删除失败也显示成功）。
                The backend now reports honestly (ok used to be always true, so a failed delete
                still showed as a success). */
@@ -381,7 +393,10 @@ return view.extend({
             } else {
                 ui.addNotification(null, (d && d.error) || T('删除失败'), 'error');
             }
-        }).catch(function() { ui.addNotification(null, T('网络错误'), 'error'); });
+        }).catch(function() {
+            self._actionBusy = false;
+            ui.addNotification(null, T('网络错误'), 'error');
+        });
     },
 
     fetchStatus: function() {
@@ -475,7 +490,12 @@ return view.extend({
      * so a repeat submission overwrites the script currently executing and spawns a second
      * process, leaving the core or the panel files half-updated. */
     _actionLocked: function() {
-        return !!(this._actionBusy || this.logPollInterval);
+        // Only block while a destructive action is genuinely in progress. Passive log polling
+        // (e.g. a version check) must NOT arm the guard, otherwise the natural "check -> upgrade"
+        // flow gets its confirmation silently swallowed during the poll window.
+        // 仅当破坏性操作真正进行中才拦截。被动日志轮询（如检查更新）不得武装守卫，否则
+        // 「检查→升级」的自然流程会在轮询窗口内被静默吞掉确认（v2.6.4 回归）。
+        return !!this._actionBusy;
     },
 
     fetchLog: function() {
@@ -1441,7 +1461,9 @@ return view.extend({
                    Must check the success field: HTTP 200 does not mean the task started (e.g. runner write failure returns success:false). */
                 if (res && res.success) {
                     ui.addNotification(null, T('升级面板任务已启动，请在下方日志查看器中查看进度'), 'info');
-                    self._actionBusy = false;
+                    // Keep _actionBusy set while the upgrade runs; startLogPolling resets it once the
+                    // completion marker appears. Do not clear here, or a second upgrade could start mid-run.
+                    // 升级运行中保持 _actionBusy；startLogPolling 在检测到完成标记时复位，此处不提前清。
                     self.startDashboardPolling();
                 } else {
                     ui.addNotification(null, T('面板升级任务启动失败') + (res && res.error ? (': ' + res.error) : ''), 'error');
@@ -1651,6 +1673,8 @@ return view.extend({
                     if (done) {
                         clearInterval(self.logPollInterval);
                         self.logPollInterval = null;
+                        /* 破坏性操作完成：解除守卫，允许后续操作 / destructive action finished: release the guard */
+                        self._actionBusy = false;
                         /* 升级结束：恢复用户之前开启的自动刷新 / Upgrade end: resume the auto-refresh the user had enabled */
                         self._autoRefreshPaused = false;
                     }
@@ -1659,6 +1683,8 @@ return view.extend({
             if (pollCount >= 150) {
                 clearInterval(self.logPollInterval);
                 self.logPollInterval = null;
+                /* 轮询超时兜底：同样解除守卫，避免永久卡死 / safety: also release the guard */
+                self._actionBusy = false;
                 self._autoRefreshPaused = false;
             }
         }, 2000);
@@ -1736,7 +1762,8 @@ return view.extend({
             self.sendAction('install_core').then(function(res) {
                 if (res && res.success) {
                     ui.addNotification(null, T('安装任务已启动，请在下方日志查看器中查看进度'), 'info');
-                    self._actionBusy = false;
+                    // Keep _actionBusy during install; startLogPolling resets it on completion.
+                    // 安装运行中保持 _actionBusy，startLogPolling 完成后复位。
                     self.startLogPolling();
                 } else {
                     ui.addNotification(null, T('安装任务启动失败') + (res && res.error ? ': ' + res.error : ''), 'error');
@@ -1789,7 +1816,8 @@ return view.extend({
                 if (res && res.success) {
                     var msg = force ? T('强制重装任务已启动，请在下方日志查看器中查看进度') : T('升级任务已启动，请在下方日志查看器中查看进度');
                     ui.addNotification(null, msg, 'info');
-                    self._actionBusy = false;
+                    // Keep _actionBusy during upgrade; startLogPolling resets it on completion.
+                    // 升级运行中保持 _actionBusy，startLogPolling 完成后复位。
                     self.startLogPolling();
                 } else {
                     ui.addNotification(null, T('升级任务启动失败') + (res && res.error ? ': ' + res.error : ''), 'error');
