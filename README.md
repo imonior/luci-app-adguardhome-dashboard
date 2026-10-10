@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.4**
+**v2.6.5**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -376,6 +376,14 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.6.5**
+  - **Fixed "Clear Cache & Reload" having no effect — the cached view JS is now actually refreshed** (two independent causes had to be fixed together): the button re-fetched this view as `dashboard.js?_cb=<timestamp>`, but the HTTP cache keys on the full URL *including the query string*, so that only refreshed an entry nobody ever requests. LuCI loads view modules as `base_url + module path + '.js'` plus `?v=` + `resource_version` whenever the page's `luci.js` src carries `?v=` (`luci.js:2474`, present since 21.02) — and that `?v=` tracks LuCI itself, not this panel, so it never changes when the panel is upgraded. That is why a stale `dashboard.js` was served indefinitely and why disabling browser caching was the only workaround. Both the bare URL and the `?v=` URL are now re-fetched with `cache: 'reload'` (which bypasses the cache read and then writes the fresh response back), so the exact key LuCI requests is the one that gets refreshed, and the reload genuinely picks up the new view
+  - **Conditional requests were being answered with `304`, which is why even Ctrl+F5 / Cmd+Shift+R did nothing**: a revalidation carries `If-None-Match` / `If-Modified-Since`, and as soon as the server's validator still reports "not modified" the browser keeps reusing the stale cached body. On routers without a battery-backed RTC the clock falls back to the firmware build date after a reboot, so a freshly deployed file can carry an mtime *older* than the cached one and uhttpd answers `304` — the new view is on disk, yet every reload re-serves the old one. DevTools "Disable cache" appears to help only because it skips the cache lookup entirely and therefore sends no conditional headers. The refresh now sends a deliberately non-matching `If-None-Match` plus an epoch `If-Modified-Since`, so the server answers `200` with the full body, and `cache: 'reload'` (which bypasses the cache read and writes the fresh response back) stores it
+  - **The button now proves it is working**: it disables itself and switches to "Working..." on click, instead of looking completely inert while the stale view was still being served
+  - **A stalled request can no longer postpone the reload forever**: the cache refresh is wrapped in a promise that also settles after a 3 s timeout, so a hanging fetch still falls through to the reload
+  - **Note**: a browser already stuck on a stale view needs one manual hard refresh (Ctrl+F5 / Cmd+Shift+R) to load this version — the stale copy of the button cannot repair itself. Every subsequent panel upgrade is then handled automatically
+  - Version bumped to 2.6.5; `checksums.sha256` regenerated. No new i18n strings (the "Working..." label already existed)
 
 - **v2.6.4**
   - **Security: remote version strings are no longer interpolated into shell commands (root RCE)**: `check_update` and `check_dashboard_update` used to write the version fetched from the network straight into `util.exec("echo '  result: latest = " .. v .. "' >> " .. EXEC_LOG)`. The capture patterns (`(.-)` and `([^"]+)`) both accept `'`, `$(`, backticks and `;`, so a single quote closed the literal and executed arbitrary commands as root (uhttpd runs as root). Both endpoints are called automatically ~1 s after the page loads, and a user-supplied `mirror|https://<host>/` — or any tampering with a mirror/MITM — was enough to control the value. All 14 log writes now go through a Lua `io.open(..., "a")` helper (`log_line` / `log_start`), so log content is only ever bytes; version strings additionally pass a `safe_version()` whitelist (`^v?%d+%.%d+%.%d+[%w%.%+%-]*$`) before use

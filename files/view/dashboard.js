@@ -7,7 +7,7 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.6.4";
+var DASHBOARD_VIEW_VERSION = "2.6.5";
 /* 本视图 JS 的部署路径（自修复时用于绕过 HTTP 缓存重新拉取自己）
  * Deployed path of this view JS (used by the self-heal to re-fetch itself past the HTTP cache). */
 var VIEW_JS_URL = "/luci-static/resources/view/adguardhome/dashboard.js";
@@ -499,7 +499,8 @@ return view.extend({
     /* Bypass every layer that keeps an old view alive and reload once.
      * 绕过所有让旧视图存活的缓存层并重载一次：
      * ① localStorage 里 LuCI 缓存的 view 模块；② HTTP 缓存里的 view JS（用 cache:'reload'
-     * 重新拉取，覆盖该条目）；③ Cache Storage；④ replace 到带 cache-buster 的 URL。
+     * 重新拉取，裸 URL 与带 ?v= 的 URL 各一次，以覆盖 LuCI 真正会请求的那个条目）；③ Cache
+     * Storage；④ replace 到带 cache-buster 的 URL。
      * 注意 location.reload(true) 的 force 参数已被浏览器忽略，无法取代以上步骤。 */
     hardReload: function() {
         try {
@@ -510,11 +511,58 @@ return view.extend({
                 }
             }
         } catch (e) {}
-        var _bust = Promise.resolve();
+
+        /* 关键修正：必须刷新「LuCI 真正会请求的那一个」缓存条目。
+         * luci.js 加载视图模块时拼的 URL 是 base_url + 模块路径 + '.js'，并在页面里 luci.js 的 src
+         * 带 ?v= 时再追加 '?v=' + resource_version（21.02 起即有，见 luci.js:2474 / luci2102.js:2444）。
+         * 这个 ?v= 只随 LuCI 自身变化，**不随本面板升级变化**，而 HTTP 缓存以完整 URL（含 query）为键
+         * —— 于是旧的 dashboard.js 被永久命中。早先的 '?_cb=<ts>' 刷新的是一个根本没人请求的第三个
+         * 条目，按钮因此「点了没反应」，只有关掉浏览器缓存才能绕开。
+         * 这里把裸 URL 与带 ?v= 的 URL 各刷一次，两种情形都能命中真正的键。
+         * Key fix: refresh the exact cache entry LuCI will request. luci.js builds a view module URL as
+         * base_url + module path + '.js', and appends '?v=' + resource_version when the page's luci.js
+         * src carries ?v= (present since 21.02; luci.js:2474 / luci2102.js:2444). That ?v= tracks LuCI
+         * itself, NOT this panel's version, while the HTTP cache keys on the full URL (query included) —
+         * so a stale dashboard.js keeps being served. The old '?_cb=<ts>' form refreshed a third entry
+         * nobody requests, hence a button that looked dead unless browser caching was disabled.
+         * Both the bare URL and the ?v= URL are refreshed here, so either case hits the real key. */
+        var _urls = [VIEW_JS_URL];
         try {
-            _bust = fetch(VIEW_JS_URL + '?_cb=' + Date.now(), { cache: 'reload', credentials: 'same-origin' })
-                .then(function() {}, function() {});
+            var _rv = (typeof L !== 'undefined' && L.env && L.env.resource_version) ? L.env.resource_version : '';
+            if (_rv) { _urls.push(VIEW_JS_URL + '?v=' + _rv); }
         } catch (e) {}
+
+        /* 强制服务端回 200 全量内容，而不是 304：条件请求（Ctrl+F5，以及 cache:'reload' 的常规形态）
+         * 会带上 If-None-Match / If-Modified-Since，只要服务端校验器仍判「未修改」，浏览器就继续复用
+         * 缓存里的旧 body。路由器上典型成因是没有电池 RTC：重启后时钟回跳到固件编译日期，新部署的
+         * 文件 mtime 反而比缓存里的旧，uhttpd 于是回 304 —— 这正是「Ctrl+F5 毫无效果，只有禁用掉
+         * 浏览器缓存才行」的根因。这里显式带上必然不匹配的 If-None-Match 与 1970 的 If-Modified-Since，
+         * 让服务端无论如何都回 200；配合 cache:'reload' 把新 body 写回缓存条目。
+         * Force a 200 with the full body instead of a 304: a conditional request (Ctrl+F5, and the
+         * usual shape of cache:'reload') carries If-None-Match / If-Modified-Since, and as soon as the
+         * server's validator still says "not modified" the browser keeps reusing the stale cached body.
+         * On routers the classic cause is a missing battery-backed RTC: after a reboot the clock falls
+         * back to the firmware build date, so the newly deployed file's mtime is older than the cached
+         * one and uhttpd answers 304 — exactly why Ctrl+F5 did nothing and only disabling the browser
+         * cache worked. A deliberately non-matching If-None-Match plus an epoch If-Modified-Since makes
+         * the server answer 200 either way, and cache:'reload' writes the fresh body back. */
+        var _hdrs = {
+            'If-None-Match': '"agh-force-refresh-' + Date.now() + '"',
+            'If-Modified-Since': 'Thu, 01 Jan 1970 00:00:00 GMT'
+        };
+
+        var _bust = new Promise(function(_resolve) {
+            var _left = _urls.length;
+            var _fin = function() { if (_left > 0 && --_left === 0) { _resolve(); } };
+            _urls.forEach(function(_u) {
+                try {
+                    fetch(_u, { cache: 'reload', credentials: 'same-origin', headers: _hdrs })
+                        .then(_fin, _fin);
+                } catch (e) { _fin(); }
+            });
+            /* 别让一次卡住的请求把重载无限期拖住 / never let a hanging request postpone the reload forever */
+            setTimeout(function() { while (_left > 0) { _fin(); } }, 3000);
+        });
         _bust.then(function() {
             if (window.caches && caches.keys) {
                 return caches.keys().then(function(_ks) {
@@ -767,7 +815,17 @@ return view.extend({
         var dashReloadBtn = E('button', {
             class: 'btn cbi-button',
             style: 'margin-right:10px',
-            click: function() { self.hardReload(); }
+            click: function(ev) {
+                /* 立刻给出可见反馈：此前点下去界面毫无变化（旧 JS 一直被从缓存里吐出来），
+                 * 按钮置灰可以证明点击已生效、清缓存正在进行中。
+                 * Give visible feedback at once: the click previously looked like it did nothing
+                 * (the stale JS kept being served from cache); disabling the button proves the click
+                 * registered and that the cache refresh is under way. */
+                var _b = ev.currentTarget;
+                _b.disabled = true;
+                _b.textContent = T('处理中...');
+                self.hardReload();
+            }
         }, T('清缓存并重载'));
 
         var logPreStyle = 'max-height:240px;overflow-y:auto;padding:10px;background:' + theme.logBg + ';color:' + theme.logColor + ';font-size:12px;line-height:1.4;border-radius:4px;white-space:pre-wrap;word-break:break-all';
