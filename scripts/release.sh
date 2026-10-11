@@ -148,13 +148,17 @@ else
     fail "checksums.sha256 missing"
 fi
 
-# ── 4b. release signature / 发布签名（供应链真实性） ──
-# 每个发布都必须签名：升级 runner 与 install.sh 都要求 checksums.sha256.sig 存在且可验。
-# Every release must be signed: both the upgrade runner and install.sh require checksums.sha256.sig.
+# ── 4b. release signature / 发布签名 ──
+# 自 v2.6.13 起签名机器已移除（stock OpenWrt 上的 openssl 会把有效签名误报为无效，
+# 把签名当硬门禁会卡死升级）。升级/安装现在只做逐文件 sha256 完整性校验（与 2.6.2 一致）。
+# As of v2.6.13 the signature machinery is removed: a stock OpenWrt openssl misreports a valid
+# signature as invalid, and gating on it bricked upgrades. Upgrade/install now use per-file sha256
+# integrity only (matching 2.6.2). There is intentionally no checksums.sha256.sig requirement.
+# ── 4b. release signature removed / 发布签名已移除 ──
 if [ -f checksums.sha256.sig ]; then
-    ok "checksums.sha256.sig present"
+    warn "checksums.sha256.sig present but no longer used — the release-signature feature was removed in v2.6.13; you can delete it"
 else
-    fail "checksums.sha256.sig missing — sign before tagging (DASH_SIGN_KEY_FILE + openssl)"
+    ok "no checksums.sha256.sig (expected — signature feature removed in v2.6.13)"
 fi
 
 # ── 5. i18n / 多语言（po ↔ lmo 同步、漏翻、JS 字典、双语 README 结构） ──

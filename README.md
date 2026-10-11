@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.12**
+**v2.6.13**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -288,10 +288,7 @@ curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashbo
 
 When you upgrade (or install) through a mirror (`mirror|…`), the files **and** `checksums.sha256` both come from that same mirror. The per-file sha256 check therefore proves **integrity** (no corruption, no truncated download) and blocks a **stale cached build** from a CDN — but it does **not** prove **authenticity**: a malicious mirror (or a man-in-the-middle) can serve a self-consistent `(files, checksums.sha256)` pair, and the hash comparison passes because the checksum list is itself fetched from the attacker.
 
-Starting with **v2.6.9**, `checksums.sha256` is signed at release time and the upgrade runner / installer verify `checksums.sha256.sig` against a **public key pinned inside the shipped plugin and installer**. The private key lives only in CI (a secret), so even a malicious mirror that serves both the files and the manifest cannot forge a valid signature — tampering is detected and the upgrade is refused. Two practical notes:
-
-- **Trust anchor.** Authenticity rests on the pinned key baked into the *installed* plugin (for upgrades) or the *installer you fetched* (for first install). This is the same trust you already place in the GitHub repo / one-click command; it is not a new assumption.
-- **`openssl` is required on the router.** The runner verifies with `openssl dgst -sha256 -verify`. If `openssl` is missing, deployment is **refused** (fail-closed) and the log tells you `opkg install openssl-util`. There is no authenticity guarantee without a verifier, so we do not silently skip.
+**As of v2.6.13 the RSA release-signature check is removed.** It was added in v2.6.9 to close the self-referential-checksum gap, but on stock OpenWrt the `openssl` CLI misreports a perfectly valid signature as invalid (confirmed: the released files verify `Verified OK` off-router, yet a hard gate there bricked upgrades even after `openssl-util` was installed — directly violating the project rule "signature verification must never be a hard gate for upgrades"). Upgrade / install now use **per-file sha256 integrity only, exactly like 2.6.2** — which catches corruption and stale proxy caches, but cannot prove authenticity against a malicious mirror.
 
 Mirrors are still a convenience, not a trust boundary: use a mirror you trust, or connect directly to `raw.githubusercontent.com`.
 
@@ -390,6 +387,10 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
 
+- **v2.6.13**
+  - **Removed the RSA release-signature check entirely — back to the 2.6.2 way.** The signature feature (added in v2.6.9) was meant to prove release authenticity against a malicious mirror, but `openssl` on stock OpenWrt misreports a valid signature as invalid, and gating on it bricked upgrades even after `openssl-util` was installed (the released files actually verify `Verified OK` off-router — confirmed byte-identical through the proxy and on desktop OpenSSL). We reverted to the pre-signature behaviour: upgrade and install now verify **per-file sha256 integrity only**, exactly like 2.6.2. This still catches corruption and stale proxy caches, but no longer blocks a working upgrade. The pinned public key, `verify_sig` / `verify_release_sig`, the openssl-util auto-install, and `checksums.sha256.sig` generation are all gone
+  - Manifest bumped to 2.6.13; `checksums.sha256` regenerated (no signature)
+
 - **v2.6.12**
   - **Upgrade auto-installs `openssl-util` for full signature verification (B+graceful)**: the release-signature check is now best-effort with a self-healing step. If `openssl` (the CLI from `openssl-util`) is missing, the runner first tries `opkg install openssl-util`; if that succeeds it verifies the signature at full strength, and only if the install fails (no `opkg` / offline) does it fall back to sha256-only with a warning. `checksums.sha256.sig` unavailable also degrades to sha256-only. Only a present-but-invalid signature (genuine tampering) still refuses to deploy. This fixes the v2.6.9 regression where a missing `openssl` refused every upgrade on stock OpenWrt images without `openssl-util`
   - Manifest bumped to 2.6.12; `checksums.sha256` regenerated and re-signed
@@ -409,6 +410,7 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
   - **Fixed every write action returning HTTP 403 and doing nothing**: dashboard upgrade, core upgrade/reinstall, backup restore/delete, proxy set, and clear-log all silently no-op'd. v2.6.4 had switched those action routes from `call()` to `post()`; LuCI's `post()` triggers `test_post_security()`, which requires the CSRF token in the **form body**, but this view's `request.post` (the `Request` class from `'require request'`) sends a **JSON body with no token at all** — not in the form body and not in any header — so every write was rejected with 403 and never reached the handler. Reverted all action routes to `call()` (the v2.6.2/2.6.3 form that was confirmed working)
   - **Added RSA-signed release verification (supply-chain authenticity)**: `checksums.sha256` is now signed at release time, and the upgrade runner / installer verify `checksums.sha256.sig` against a **public key pinned in the plugin and the installer** before deploying. A malicious mirror or man-in-the-middle that serves both the files and the checksum list still cannot forge the signature (it never sees the private key), so tampering is detected and the upgrade is refused — closing the self-referential-checksum gap documented in the Security section
   - **Fail-closed on the router**: if `openssl` is missing, deployment is refused and the log tells you `opkg install openssl-util` — without a verifier there is no authenticity guarantee, so we refuse rather than silently skip
+  - **Reverted in v2.6.13**: the signature feature was removed because stock OpenWrt's `openssl` misreported valid signatures as invalid and bricked upgrades; the project now uses per-file sha256 integrity only (the 2.6.2 way)
   - The earlier "upgrade did nothing" reports were two distinct bugs: the v2.6.8 guard fix addressed the *button-click* path; this release fixes the *route/CSRF* path that actually blocked the backend. Manifest bumped to 2.6.9; `checksums.sha256` regenerated and now signed
 
 - **v2.6.8**

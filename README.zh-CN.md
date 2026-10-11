@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.12**
+**v2.6.13**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -280,10 +280,7 @@ curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashbo
 
 当你通过镜像（`mirror|…`）升级或安装时，文件**与** `checksums.sha256` 都来自同一个镜像。逐文件的 sha256 校验因此能保证**完整性**（无损坏、无截断下载），也能挡住 CDN 返回的**缓存旧版本**——但它**不能**证明**真实性**：恶意镜像（或中间人）可以同时提供一套自洽的 `(文件, checksums.sha256)`，而哈希比对会通过，因为那份校验清单本身也是从攻击者那里取来的。
 
-自 **v2.6.9** 起，`checksums.sha256` 在发布时被签名，升级 runner 与安装脚本会用**钉死在已发布插件与安装器里的公钥**校验 `checksums.sha256.sig`。私钥仅存于 CI（密钥），所以即便恶意镜像同时提供文件与清单，也因拿不到私钥而无法伪造有效签名——篡改会被发现并拒绝部署。两点实践说明：
-
-- **信任锚。** 真实性依赖钉死在*已安装插件*（升级时）或*你拉取的安装器*（首次安装时）里的公钥。这和你本来就信任 GitHub 仓库 / 一键命令是同一回事，并非新的假设。
-- **路由器上需要 `openssl`。** runner 用 `openssl dgst -sha256 -verify` 验签。若 `openssl` 缺失，则**拒绝部署**（fail-closed），日志会提示 `opkg install openssl-util`。没有验签器就没有真实性保证，因此我们不会静默跳过。
+**自 v2.6.13 起，RSA 发布签名校验已彻底移除。** 它于 v2.6.9 加入以补上「自指校验」漏洞，但基础 OpenWrt 上的 `openssl` 会把**完全有效**的签名误报为无效（已确认：同一份发布文件经代理取回后字节与签名一致、桌面端 OpenSSL 复现验证为 `Verified OK`；而把它当硬门禁，即便装上 `openssl-util` 仍会把升级卡死，直接违反本项目铁律「签名校验不得作为升级硬门禁」）。升级 / 安装现在**只做逐文件 sha256 完整性校验，与 2.6.2 完全一致**——它能拦住下载损坏与代理缓存的旧版，但无法对恶意镜像证明真实性。
 
 镜像依然只是便利，而非信任边界：请使用你信任的镜像，或直接直连 `raw.githubusercontent.com`。
 
@@ -382,6 +379,10 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
 
+- **v2.6.13**
+  - **彻底移除 RSA 发布签名校验——回到 2.6.2 的方式。** 签名功能（v2.6.9 加入）本想对恶意镜像证明发布真实性，但基础 OpenWrt 上的 `openssl` 会把有效签名误报为无效，且把它当硬门禁即便装上 `openssl-util` 仍会卡死升级（发布文件其实在路由器外验证为 `Verified OK`——经代理取回字节一致、桌面 OpenSSL 复现确认）。我们回退到签名前的行为：升级与安装**只做逐文件 sha256 完整性校验**，与 2.6.2 完全一致。它仍能拦住下载损坏与代理缓存旧版，但不再阻断本可成功的升级。钉死公钥、`verify_sig` / `verify_release_sig`、openssl-util 自动安装、以及 `checksums.sha256.sig` 的生成全部移除
+  - 版本升至 2.6.13；重新生成 `checksums.sha256`（无签名）
+
 - **v2.6.12**
   - **升级自动安装 `openssl-util` 以获得完整签名校验（B+graceful）**：发布签名校验改为「尽力而为 + 自愈」。若 `openssl`（来自 `openssl-util` 包的命令行）缺失，升级器先尝试 `opkg install openssl-util`；装成即按满血强度验签，仅当安装失败（无 `opkg` / 离线）才降级为仅 sha256 校验并告警。取不到 `checksums.sha256.sig` 同样降级为仅 sha256。只有「签名存在但验签失败」（真篡改）才拒绝部署。修复了 v2.6.9 的回归：基础 OpenWrt 镜像默认不带 `openssl-util`，缺 `openssl` 会导致每次升级都被拒绝
   - 版本升至 2.6.12；重新生成并重新签署 `checksums.sha256`
@@ -401,6 +402,7 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
   - **修复所有写操作返回 HTTP 403 且毫无反应**：面板升级、核心升级/重装、备份恢复/删除、代理设置、清空日志全部静默空转。v2.6.4 把这些 action 路由从 `call()` 改成了 `post()`；而 LuCI 的 `post()` 才会触发 `test_post_security()`，它要求 CSRF token 在**表单体**里，但本视图的 `request.post`（`'require request'` 得到的 `Request` 类）发的是 **JSON body、完全不带 token**——表单体没有、请求头也没有——于是每个写操作都被 403 拒绝、根本没进到 handler。现已把所有 action 路由还原为 `call()`（即 v2.6.2 / 2.6.3 确认可用的形态）
   - **新增 RSA 签名发布校验（供应链真实性）**：发布时对本 `checksums.sha256` 签名，升级 runner 与安装脚本在部署前会用**钉死在插件与安装器里的公钥**校验 `checksums.sha256.sig`。即便恶意镜像同时提供文件与清单，也因拿不到私钥而无法伪造签名，篡改会被发现并拒绝部署——补上了「安全」一节里提到的自指校验漏洞
   - **在路由器上端到端 fail-closed**：若 `openssl` 缺失则拒绝部署，日志会提示 `opkg install openssl-util`——没有验签器就没有真实性保证，因此宁可拒绝也不静默跳过
+  - **已于 v2.6.13 撤销**：签名功能因基础 OpenWrt 的 `openssl` 误报有效签名为无效、会卡死升级而被整体移除；项目现仅用逐文件 sha256 完整性（即 2.6.2 方式）
   - 此前「升级没反应」其实是两类不同的 bug：v2.6.8 的守卫修复针对的是*按钮点击*路径，本版本修复的是真正挡住后端的*路由/CSRF*路径。版本升至 2.6.9；重新生成并已签署 `checksums.sha256`
 
 - **v2.6.8**

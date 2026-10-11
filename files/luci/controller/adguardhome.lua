@@ -88,31 +88,6 @@ local DASH_FILES = {
     { src = "manifest.json",                            dst = "/usr/share/adguardhome-dashboard/manifest.json",  base = "manifest.json",          kind = "json", min_size = 20 }
 }
 
--- ── Signed release fingerprint (supply-chain authenticity) ──
--- RSA-4096 public key; the DER's SHA-256 is 19db76d6…ba85ac62. The private key lives only
--- in CI (a secret) and signs checksums.sha256 at release time. The runner below verifies
--- checksums.sha256.sig against THIS pinned key, so a malicious mirror / man-in-the-middle
--- cannot forge the manifest even though it serves both the files and the checksum list.
--- 发布指纹签名（供应链真实性）：RSA-4096 公钥，DER 的 sha256 为 19db76d6…ba85ac62。
--- 私钥仅存于 CI（密钥），发布时对 checksums.sha256 签名。runner 用本钉死公钥验签，
--- 因此即便恶意镜像同时提供文件与清单，也因拿不到私钥而无法伪造。
-local DASH_SIGN_PUBKEY = {
-    "-----BEGIN PUBLIC KEY-----",
-    "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAr7CmZj3wzKCeqv1HlFN2",
-    "CbHTFW5N715tWlFjjaGgImqGbksrOQjY3L4w+W9LY956di4WDR/sO3Jjx/lf/eyG",
-    "WuG3wj7+RAfXVPA4iFWpGRVdcHuaKpBGS1JVd7Hul5fl1lLpkoAnPYczT1aB00mN",
-    "HiJpsmXHrwZenN9Y1URfszhM3pxpxueBotTHrf7SwmBGdw9XN4X86IdMP3QnyxvI",
-    "tddB7ClGq19Y+2x1r74bKpp9imAxPs+FicZZfVkBQcPwsG4DmwlZZ1x1NMkV8DO6",
-    "hzwkh/kik8yvC7dBaiGwROKN7EI3fF/YMMk6wgUy96vD/C0Hm2SODbqkDz6zHbV+",
-    "Yf55HeT/KxqwSB0SRfnsTOWSq1LiW93ZRnGQB/iUsqFoUpfYbAjwsmHOxA6RtIGD",
-    "7dylVRHdc3DjZ98zVWCXyOMuvEnLdDDpEcmtxK/0pAcfFpfcZrpFgc36paAFbzPM",
-    "A5QBr2/GT4lXrPA9F/38xFQIK/MfehA3HEV7AlUwZLXxP9MIOOavbSa6hR4RK9VT",
-    "ZkR1x47epe/ymO6/dkOxLykAoQ9gWo0Rusrgb2jtDGSwVrFxWv9lOWunTBTBYXHV",
-    "omufZwCkUB59ZUzn/FsiyilEoNHZMlKBZ+87ZEGhSxJM1mkgdaqzhVANvzLnFkf0",
-    "+5vvsivQ2lTAEErm0dnH6nMCAwEAAQ==",
-    "-----END PUBLIC KEY-----",
-}
-
 -- 代理规格（wire 格式，与 install.sh / 面板共用；持久化于 /etc/adguardhome-dashboard.proxy）：
 --   mirror|<prefix>  镜像源：把原 URL 拼到前缀后面（**仅中国大陆有效**）
 --   proxy|<addr>     全量代理服务器：curl -x，URL 不变（类似系统代理，任意地区可用）
@@ -1355,15 +1330,6 @@ dl_disp() {
 }
 ]==])
     add("")
-    -- 钉死的发布公钥（信任锚 = 已安装的插件本体，不来自镜像）；runner 用它对清单验签。
-    -- The pinned release public key (trust anchor = the installed plugin itself, never from the mirror);
-    -- the runner uses it to verify the manifest signature.
-    add("SIG=\"$TMPDIR/checksums.sha256.sig\"")
-    add("PUBKEY_FILE=\"$TMPDIR/dash_pub.pem\"")
-    add("cat > \"$PUBKEY_FILE\" <<'LUACI_PUBKEY'")
-    for _, l in ipairs(DASH_SIGN_PUBKEY) do add(l) end
-    add("LUACI_PUBKEY")
-    add("")
     add("mkdir -p \"$TMPDIR\"")
     add("cleanup() { rm -rf \"$TMPDIR\" 2>/dev/null; rm -f /tmp/agh_dashboard_upgrade_runner.sh 2>/dev/null; }")
     add("trap 'cleanup' EXIT INT TERM")
@@ -1429,30 +1395,6 @@ dl_disp() {
     add("  return 0")
     add("}")
     add("")
-    -- 发布指纹验签：用钉死公钥校验 checksums.sha256.sig（B+graceful）。
-    -- Release fingerprint verification: verify checksums.sha256.sig against the pinned key (B+graceful).
-    -- 1) .sig 取不到 → 降级为仅 sha256 + 告警（镜像没代理签名文件，无法验真）。
-    --    .sig unavailable -> degrade to sha256-only + warn (mirror did not proxy the signature).
-    -- 2) openssl 缺失 → 先尝试 `opkg install openssl-util`；装成再满血验签，装不上才降级。
-    --    openssl missing -> try `opkg install openssl-util` first; verify at full strength if installed, else degrade.
-    -- 3) 签名存在但验签失败 → 拒绝部署（fail-closed，防恶意镜像/中间人伪造）。
-    --    A present-but-invalid signature -> refuse to deploy (fail-closed, blocks a forged mirror / MITM).
-    add("verify_sig() {")
-    add("  [ -f \"$SIG\" ] || { echo \"   [verify] checksums.sha256.sig missing: skipping signature verification, sha256-only (a malicious mirror could forge files)\" >> \"$LOG\"; return 0; }")
-    add("  if ! command -v openssl >/dev/null 2>&1; then")
-    add("    echo \"   [verify] openssl not found; trying 'opkg install openssl-util' for full release authenticity...\" >> \"$LOG\"")
-    add("    if command -v opkg >/dev/null 2>&1; then")
-    add("      if command -v timeout >/dev/null 2>&1; then timeout 120 opkg install openssl-util >> \"$LOG\" 2>&1; else opkg install openssl-util >> \"$LOG\" 2>&1; fi")
-    add("      command -v openssl >/dev/null 2>&1 || { echo \"   [verify] openssl still missing after install attempt; skipping signature verification, sha256-only (a malicious mirror could forge files) -- run 'opkg install openssl-util' for full authenticity\" >> \"$LOG\"; return 0; }")
-    add("    else")
-    add("      echo \"   [verify] opkg not available; skipping signature verification, sha256-only (a malicious mirror could forge files) -- install openssl-util for full authenticity\" >> \"$LOG\"")
-    add("      return 0")
-    add("    fi")
-    add("  fi")
-    add("  if openssl dgst -sha256 -verify \"$PUBKEY_FILE\" -signature \"$SIG\" \"$CHECKSUMS\" >/dev/null 2>&1; then return 0; fi")
-    add("  echo \"   [verify] signature INVALID: checksums.sha256 not authentic (possible mirror/man-in-the-middle tampering)\" >> \"$LOG\"")
-    add("  return 1")
-    add("}")
     add("")
     add("download_one() {")
     add("  d_src=\"$1\"; d_out=\"$2\"")
@@ -1521,13 +1463,6 @@ dl_disp() {
     -- 'list_backups') that forged content can satisfy with a single extra line. Better to
     -- abort and roll back than to deploy files that were never sha256-compared.
     add("download_one 'checksums.sha256' \"$CHECKSUMS\" || fail_task 'download checksums.sha256 (refusing to deploy without sha256 verification)'")
-    -- 签名校验为尽力而为（best-effort）：openssl 缺失或 .sig 未取到 → 降级为仅 sha256 + 告警，不阻断升级
-    --（与 2.6.2 行为一致：2.6.2 本就无签名、直接升级）。仅当 .sig 存在但验签失败（真篡改）才拒绝部署。
-    -- Signature verification is best-effort: missing openssl or an undownloaded .sig degrades to sha256-only
-    -- + warn and does NOT block the upgrade (matches 2.6.2, which had no signature and upgraded fine). Only a
-    -- present-but-invalid signature (genuine tampering) refuses to deploy.
-    add("download_one 'checksums.sha256.sig' \"$SIG\" || echo \"   [verify] checksums.sha256.sig not downloaded (mirror may not proxy it); skipping signature verification\" >> \"$LOG\"")
-    add("verify_sig || fail_task 'signature verification failed (checksums.sha256 not authentic -- possible mirror/man-in-the-middle tampering)'")
 
     for i = 1, #DASH_FILES do
         local f = DASH_FILES[i]
