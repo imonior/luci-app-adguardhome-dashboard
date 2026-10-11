@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.9**
+**v2.6.10**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -390,8 +390,13 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
 
+- **v2.6.10**
+  - **Documentation correction**: the v2.6.9 changelog explained the 403 root cause as "the RPC client sends the CSRF token via the `X-CSRF-Token` **header**". That was wrong, and has been verified against the LuCI sources (21.02 / 22.03 / 24.10 / master). This view's `'require request'` resolves to the `Request` class (`classes.request = Request`, luci.js:2218), whose `post()` sends a **JSON body containing no token at all** — not in the form body, not in any header (there is no `csrf` / `X-CSRF` string anywhere in luci.js). Combined with `test_post_security()` reading only `http.formvalue("token")` (dispatcher.lua:516-530), that is why a `post()` route could only ever return 403. The 403 fix in v2.6.9 is unaffected — only its explanation was wrong
+  - **Security note stated accurately**: `call()` routes do **not** perform CSRF token validation; request legitimacy rests on the LuCI session cookie and ACL checks (dispatcher.lua:941-963). This is the normal LuCI view-layer pattern, not token-based protection
+  - Internal comments in `adguardhome.lua` corrected to match the verified mechanism; no functional change. Manifest bumped to 2.6.10; `checksums.sha256` regenerated and re-signed
+
 - **v2.6.9**
-  - **Fixed every write action returning HTTP 403 and doing nothing**: dashboard upgrade, core upgrade/reinstall, backup restore/delete, proxy set, and clear-log all silently no-op'd. v2.6.4 had switched those action routes from `call()` to `post()`; LuCI's `post()` triggers `test_post_security()`, which requires the CSRF token in the **form body**, but the RPC client (`request.post`) sends it via the `X-CSRF-Token` **header** — so every write was rejected with 403 and never reached the handler. Reverted all action routes to `call()` (the v2.6.2/2.6.3 form that was confirmed working)
+  - **Fixed every write action returning HTTP 403 and doing nothing**: dashboard upgrade, core upgrade/reinstall, backup restore/delete, proxy set, and clear-log all silently no-op'd. v2.6.4 had switched those action routes from `call()` to `post()`; LuCI's `post()` triggers `test_post_security()`, which requires the CSRF token in the **form body**, but this view's `request.post` (the `Request` class from `'require request'`) sends a **JSON body with no token at all** — not in the form body and not in any header — so every write was rejected with 403 and never reached the handler. Reverted all action routes to `call()` (the v2.6.2/2.6.3 form that was confirmed working)
   - **Added RSA-signed release verification (supply-chain authenticity)**: `checksums.sha256` is now signed at release time, and the upgrade runner / installer verify `checksums.sha256.sig` against a **public key pinned in the plugin and the installer** before deploying. A malicious mirror or man-in-the-middle that serves both the files and the checksum list still cannot forge the signature (it never sees the private key), so tampering is detected and the upgrade is refused — closing the self-referential-checksum gap documented in the Security section
   - **Fail-closed on the router**: if `openssl` is missing, deployment is refused and the log tells you `opkg install openssl-util` — without a verifier there is no authenticity guarantee, so we refuse rather than silently skip
   - The earlier "upgrade did nothing" reports were two distinct bugs: the v2.6.8 guard fix addressed the *button-click* path; this release fixes the *route/CSRF* path that actually blocked the backend. Manifest bumped to 2.6.9; `checksums.sha256` regenerated and now signed

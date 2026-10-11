@@ -304,17 +304,29 @@ local function find_init_script()
 end
 
 function index()
-    -- 读写分离：写操作一律用 post()，让 dispatcher 真正执行 CSRF token 校验。
-    -- call() 生成的 target 不带 post 字段 → require_post_security() 恒为 false →
-    -- test_post_security()（比对 http.formvalue("token") 与 session authtoken）一次都不跑，
-    -- 删备份 / 升级 / 写代理这类破坏性操作可以被 GET 触发。前端 request.post 会自动带
-    -- token（luci.js: const data = Object.assign(post ? { token: env.token } : {}, args)），
-    -- 所以改成 post() 不会打断现有调用。
-    -- Separate reads from writes: every write uses post() so the dispatcher actually runs the
-    -- CSRF token check. call() produces a target with no post field, so require_post_security()
-    -- is always false and test_post_security() (http.formvalue("token") vs the session
-    -- authtoken) never runs — destructive calls like delete/upgrade/set_proxy could be fired
-    -- with a GET. The front end's request.post always ships the token, so this is compatible.
+    -- ⚠ 全部路由一律用 call()，不要用 post()。
+    --   根因（已用真实源码核实）：本视图 'require request' 解析到的是 luci.js 的 Request 类
+    --   （classes.request = Request，luci.js:2218），其 post() 实现是
+    --     post: function(url, data, options) { return this.request(url, {method:'POST', content:data}) }
+    --   （luci.js:869）→ data 是普通对象 → 被 JSON.stringify 并置 Content-Type: application/json
+    --   （luci.js:772-777）。它既不发 X-CSRF-Token 头，也不把 token 放进表单体——整个 luci.js
+    --   里没有任何 csrf / X-CSRF 字样（带 token 的 poll()、post(url,args,cb) 属于 LuCI 类的
+    --   废弃别名，本视图并未使用）。
+    --   而 dispatcher 的 post() 目标在 target.post==true 时触发 test_post_security()，它只认
+    --   表单体 token：http.formvalue("token") ~= context.authtoken → 恒 403、handler 永不执行
+    --   （判定 dispatcher.lua:516-530，调用点 dispatcher.lua:939）。
+    --   v2.6.4 误将写操作全改成 post()，造成全量 403 回归（升级/核心升级/备份与恢复/删除/
+    --   代理/clear_log/action 全失效）；v2.6.2/2.6.3 用 call() 时一切正常。v2.6.9 已还原。
+    --   call() 分支直接 util.copcall(func, unpack(argv)) 调用 handler、不过 post 校验
+    --   （dispatcher.lua:993-1017），argv 与 http.formvalue 均可正常读到参数。
+    --   ⚠ 安全边界（如实记录，勿夸大）：call() 路由不做 CSRF token 校验，合法性依赖 LuCI 会话
+    --   cookie + ACL 鉴权（dispatcher.lua:941-963），而非 token 校验。这是 LuCI 视图层惯例；
+    --   若将来要真正启用 token 校验，须同时让前端改用带 token 的表单提交。
+    -- WARNING: use call() for every route, never post(). Verified against real sources: the
+    --   view's 'require request' is the Request class (luci.js:2218) whose post() JSON-encodes
+    --   the payload and sends no CSRF token at all (luci.js:869, 772-777); dispatcher's post()
+    --   target demands the form-body token (dispatcher.lua:516-530, 939) -> permanent 403, which
+    --   is what broke every write route in v2.6.4. Restored to call() in v2.6.9.
     entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, nil)
     entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, nil)
     entry({"admin", "services", "adguardhome", "set_proxy"}, call("set_proxy"), nil, nil)
@@ -329,18 +341,6 @@ function index()
     entry({"admin", "services", "adguardhome", "delete_backup"}, call("delete_backup"), nil, nil)
     entry({"admin", "services", "adguardhome", "log"}, call("get_log"), nil, nil)
     entry({"admin", "services", "adguardhome", "clear_log"}, call("clear_log"), nil, nil)
-    -- ⚠ 必须用 call()，不要用 post()：前端走 LuCI RPC 客户端 request.post，token 经
-    --   X-CSRF-Token 请求头发送；而 dispatcher 的 post() 目标只在 target.post==true 时触发
-    --   test_post_security()，它只认表单体里的 token（http.formvalue("token")），RPC 客户端
-    --   永远不会在表单体带 token → 始终 403、handler 永不执行。v2.6.4 误将全部写操作路由
-    --   改成 post() 造成全量 403 回归（升级/核心升级/备份恢复删除/代理/clear_log/action 全失效），
-    --   v2.6.2/2.6.3 用 call() 时一切正常。RPC 层的头 token 已提供 CSRF 防护，call() 同样受保护。
-    --   WARNING: use call(), never post(): the frontend uses LuCI's RPC client request.post which
-    --   sends the CSRF token via the X-CSRF-Token header; dispatcher's post() target only triggers
-    --   test_post_security() when target.post==true, and that check reads the form-body token
-    --   (http.formvalue("token")) which the RPC client never sets -> always 403, handler never runs.
-    --   The v2.6.4 switch to post() broke every write route; call() (as in v2.6.2/2.6.3) works and
-    --   stays CSRF-protected via the RPC header token.
 end
 
 function get_status()

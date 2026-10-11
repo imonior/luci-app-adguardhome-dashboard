@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.9**
+**v2.6.10**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -382,8 +382,13 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
 
+- **v2.6.10**
+  - **文档纠错**：v2.6.9 的变更记录把403 根因写成「RPC 客户端把 CSRF token 走 `X-CSRF-Token` **请求头**发送」——**这是错的**。现已在 LuCI 各版本源码（21.02 / 22.03 / 24.10 / master）上核实：本视图的 `'require request'` 解析到的是 `Request` 类（`classes.request = Request`，luci.js:2218），其 `post()` 发出的是**完全不含 token 的 JSON body**——表单体没有、任何请求头也没有（整个 luci.js 里不存在 `csrf` / `X-CSRF` 字样）。而 `test_post_security()` 只读 `http.formvalue("token")`（dispatcher.lua:516-530），两者相加就注定了 `post()` 路由必然 403。**v2.6.9 的修复本身不受影响，只是它的解释写错了**
+  - **如实标注安全边界**：`call()` 路由**不做** CSRF token 校验，请求合法性依赖 LuCI 会话 cookie 与 ACL 鉴权（dispatcher.lua:941-963）。这是 LuCI 视图层的常规做法，并非基于 token 的保护
+  - `adguardhome.lua` 内部注释同步订正为经核实的机制；无功能性改动。版本升至 2.6.10；重新生成并重新签署 `checksums.sha256`
+
 - **v2.6.9**
-  - **修复所有写操作返回 HTTP 403 且毫无反应**：面板升级、核心升级/重装、备份恢复/删除、代理设置、清空日志全部静默空转。v2.6.4 把这些 action 路由从 `call()` 改成了 `post()`；而 LuCI 的 `post()` 才会触发 `test_post_security()`，它要求 CSRF token 在**表单体**里，但 RPC 客户端（`request.post`）是把 token 走 `X-CSRF-Token` **请求头**发的——于是每个写操作都被 403 拒绝、根本没进到 handler。现已把所有 action 路由还原为 `call()`（即 v2.6.2 / 2.6.3 确认可用的形态）
+  - **修复所有写操作返回 HTTP 403 且毫无反应**：面板升级、核心升级/重装、备份恢复/删除、代理设置、清空日志全部静默空转。v2.6.4 把这些 action 路由从 `call()` 改成了 `post()`；而 LuCI 的 `post()` 才会触发 `test_post_security()`，它要求 CSRF token 在**表单体**里，但本视图的 `request.post`（`'require request'` 得到的 `Request` 类）发的是 **JSON body、完全不带 token**——表单体没有、请求头也没有——于是每个写操作都被 403 拒绝、根本没进到 handler。现已把所有 action 路由还原为 `call()`（即 v2.6.2 / 2.6.3 确认可用的形态）
   - **新增 RSA 签名发布校验（供应链真实性）**：发布时对本 `checksums.sha256` 签名，升级 runner 与安装脚本在部署前会用**钉死在插件与安装器里的公钥**校验 `checksums.sha256.sig`。即便恶意镜像同时提供文件与清单，也因拿不到私钥而无法伪造签名，篡改会被发现并拒绝部署——补上了「安全」一节里提到的自指校验漏洞
   - **在路由器上端到端 fail-closed**：若 `openssl` 缺失则拒绝部署，日志会提示 `opkg install openssl-util`——没有验签器就没有真实性保证，因此宁可拒绝也不静默跳过
   - 此前「升级没反应」其实是两类不同的 bug：v2.6.8 的守卫修复针对的是*按钮点击*路径，本版本修复的是真正挡住后端的*路由/CSRF*路径。版本升至 2.6.9；重新生成并已签署 `checksums.sha256`
