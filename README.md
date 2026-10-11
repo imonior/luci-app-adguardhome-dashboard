@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.11**
+**v2.6.12**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -389,6 +389,10 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.6.12**
+  - **Upgrade auto-installs `openssl-util` for full signature verification (B+graceful)**: the release-signature check is now best-effort with a self-healing step. If `openssl` (the CLI from `openssl-util`) is missing, the runner first tries `opkg install openssl-util`; if that succeeds it verifies the signature at full strength, and only if the install fails (no `opkg` / offline) does it fall back to sha256-only with a warning. `checksums.sha256.sig` unavailable also degrades to sha256-only. Only a present-but-invalid signature (genuine tampering) still refuses to deploy. This fixes the v2.6.9 regression where a missing `openssl` refused every upgrade on stock OpenWrt images without `openssl-util`
+  - Manifest bumped to 2.6.12; `checksums.sha256` regenerated and re-signed
 
 - **v2.6.11**
   - **"Clear Cache & Reload" now tells you what to do instead of silently failing**: a web page cannot turn off the browser's HTTP disk cache by itself. There is no JS API for it (DevTools' "Disable cache" only works while DevTools is open), Service Workers require a secure context and `http://192.168.x.x/` is not one, and LuCI loads view modules with `Request.get(url, { cache: true })` (luci.js:2541 — `cache: true` means "do not append a timestamp", luci.js:740) on the page-navigation path we cannot intercept. So when the automatic hot-swap cannot confirm a fresh view, the button now opens a guide with the exact steps for Chrome/Edge, Firefox and Safari, plus a one-click reload that fires while your cache-disable is still active

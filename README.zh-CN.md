@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.11**
+**v2.6.12**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -381,6 +381,10 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.6.12**
+  - **升级自动安装 `openssl-util` 以获得完整签名校验（B+graceful）**：发布签名校验改为「尽力而为 + 自愈」。若 `openssl`（来自 `openssl-util` 包的命令行）缺失，升级器先尝试 `opkg install openssl-util`；装成即按满血强度验签，仅当安装失败（无 `opkg` / 离线）才降级为仅 sha256 校验并告警。取不到 `checksums.sha256.sig` 同样降级为仅 sha256。只有「签名存在但验签失败」（真篡改）才拒绝部署。修复了 v2.6.9 的回归：基础 OpenWrt 镜像默认不带 `openssl-util`，缺 `openssl` 会导致每次升级都被拒绝
+  - 版本升至 2.6.12；重新生成并重新签署 `checksums.sha256`
 
 - **v2.6.11**
   - **「清缓存并重载」不再沉默失败，而是明确告诉你该怎么做**：网页**无法自行关闭**浏览器的 HTTP 磁盘缓存——JS 没有这个 API（DevTools 的「禁用缓存」只在DevTools 打开时生效）；Service Worker 需要 secure context，而 `http://192.168.x.x/` 不是；LuCI 用 `Request.get(url, { cache: true })` 加载视图模块（luci.js:2541，而 `cache: true` 的语义是「不追加时间戳」，luci.js:740），且发生在页面导航路径上，无法介入。因此当自动热替换无法确认拿到新视图时，按钮会弹出引导框，给出 Chrome/Edge、Firefox、Safari 各自的**具体操作步骤**，并提供「我已禁用缓存，刷新页面」一键刷新
