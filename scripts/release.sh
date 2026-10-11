@@ -148,6 +148,15 @@ else
     fail "checksums.sha256 missing"
 fi
 
+# ── 4b. release signature / 发布签名（供应链真实性） ──
+# 每个发布都必须签名：升级 runner 与 install.sh 都要求 checksums.sha256.sig 存在且可验。
+# Every release must be signed: both the upgrade runner and install.sh require checksums.sha256.sig.
+if [ -f checksums.sha256.sig ]; then
+    ok "checksums.sha256.sig present"
+else
+    fail "checksums.sha256.sig missing — sign before tagging (DASH_SIGN_KEY_FILE + openssl)"
+fi
+
 # ── 5. i18n / 多语言（po ↔ lmo 同步、漏翻、JS 字典、双语 README 结构） ──
 #
 # 历史坑：备份管理的英文 .po 条目整段未翻译（英文界面直接显示中文），且改了 .po

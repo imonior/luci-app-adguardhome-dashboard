@@ -1099,6 +1099,14 @@ download_from_github() {
     if gh_curl "${RAW_BASE}/checksums.sha256?_cb=${_cb}" -fsSL -m 30 --connect-timeout 10 --retry 1 \
         -o "$DOWNLOAD_DIR/checksums.sha256" 2>/dev/null; then
         log "  ✓ checksums.sha256"
+        # 一并拉取发布签名（与文件同源，经同一镜像代理）
+        # Also fetch the release signature (same source, proxied by the same mirror).
+        if gh_curl "${RAW_BASE}/checksums.sha256.sig?_cb=${_cb}" -fsSL -m 30 --connect-timeout 10 --retry 1 \
+            -o "$DOWNLOAD_DIR/checksums.sha256.sig" 2>/dev/null; then
+            log "  ✓ checksums.sha256.sig"
+        else
+            log "  $(_t "checksums.sha256.sig download failed via '$CONNECTION_LABEL'" "checksums.sha256.sig 经 '$CONNECTION_LABEL' 下载失败")"
+        fi
     else
         # 拿不到指纹清单就中止，不做降级：缺失时下方 [ -f checksums.sha256 ] 整段跳过，
         # 只剩三条 grep 语义特征，伪造内容加一个 'list_backups' 就能通过。
@@ -1195,6 +1203,11 @@ if [ -f "$LOCAL_FILES/luci/controller/adguardhome.lua" ]; then
         if [ -f "$PROJECT_ROOT/checksums.sha256" ]; then
             cp "$PROJECT_ROOT/checksums.sha256" "$DOWNLOAD_DIR/checksums.sha256"
         fi
+        # 离线包若含签名也一并复制（用于发布真实性校验）
+        # Copy the signature too if the offline package carries it (for release authenticity).
+        if [ -f "$PROJECT_ROOT/checksums.sha256.sig" ]; then
+            cp "$PROJECT_ROOT/checksums.sha256.sig" "$DOWNLOAD_DIR/checksums.sha256.sig"
+        fi
     fi
 else
     if [ "$OFFLINE" = "1" ]; then
@@ -1214,6 +1227,60 @@ sha256_of() {
     elif command -v openssl >/dev/null 2>&1; then
         openssl sha256 "$1" 2>/dev/null | awk '{print $NF}'
     fi
+}
+
+# ── Pinned RSA-4096 public key (release fingerprint authenticity) ──
+# 钉死的 RSA-4096 公钥（发布指纹真实性）。DER 的 sha256 = 19db76d6…ba85ac62。
+# 私钥仅存于 CI（密钥），发布时对 checksums.sha256 签名；本公钥钉死在脚本里，
+# 因此即便镜像同时提供文件与清单，也因拿不到私钥而无法伪造。
+dash_write_pubkey() {
+    cat > "$1" <<'DASH_PUBKEY'
+-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAr7CmZj3wzKCeqv1HlFN2
+CbHTFW5N715tWlFjjaGgImqGbksrOQjY3L4w+W9LY956di4WDR/sO3Jjx/lf/eyG
+WuG3wj7+RAfXVPA4iFWpGRVdcHuaKpBGS1JVd7Hul5fl1lLpkoAnPYczT1aB00mN
+HiJpsmXHrwZenN9Y1URfszhM3pxpxueBotTHrf7SwmBGdw9XN4X86IdMP3QnyxvI
+tddB7ClGq19Y+2x1r74bKpp9imAxPs+FicZZfVkBQcPwsG4DmwlZZ1x1NMkV8DO6
+hzwkh/kik8yvC7dBaiGwROKN7EI3fF/YMMk6wgUy96vD/C0Hm2SODbqkDz6zHbV+
+Yf55HeT/KxqwSB0SRfnsTOWSq1LiW93ZRnGQB/iUsqFoUpfYbAjwsmHOxA6RtIGD
+7dylVRHdc3DjZ98zVWCXyOMuvEnLdDDpEcmtxK/0pAcfFpfcZrpFgc36paAFbzPM
+A5QBr2/GT4lXrPA9F/38xFQIK/MfehA3HEV7AlUwZLXxP9MIOOavbSa6hR4RK9VT
+ZkR1x47epe/ymO6/dkOxLykAoQ9gWo0Rusrgb2jtDGSwVrFxWv9lOWunTBTBYXHV
+omufZwCkUB59ZUzn/FsiyilEoNHZMlKBZ+87ZEGhSxJM1mkgdaqzhVANvzLnFkf0
++5vvsivQ2lTAEErm0dnH6nMCAwEAAQ==
+-----END PUBLIC KEY-----
+DASH_PUBKEY
+}
+
+# ── Release signature verification (authenticity against a malicious mirror / MITM) ──
+# 发布签名校验（对恶意镜像 / 中间人的真实性保证）。签名缺失或验签失败 → 拒绝部署。
+verify_release_sig() {
+    _pk="$TMPDIR/dash_pub.pem"
+    dash_write_pubkey "$_pk"
+    if ! command -v openssl >/dev/null 2>&1; then
+        # 无 openssl 时降级为仅 sha256 校验（与历史行为一致），但会失去对恶意镜像的真实性保证。
+        # Without openssl we fall back to sha256-only (matching historical behaviour) but lose
+        # authenticity assurance against a malicious mirror.
+        log "  $(_t "openssl missing — cannot verify release signature (install openssl-util for full authenticity); continuing with sha256 check only" "openssl 缺失 —— 无法验证发布签名（装 openssl-util 可获得完整真实性保证）；仅用 sha256 校验继续")"
+        return 0
+    fi
+    if [ ! -f "$DOWNLOAD_DIR/checksums.sha256.sig" ]; then
+        # 离线包若未带签名则跳过；在线缺失签名则拒绝（镜像应代理到 raw 上的 .sig）。
+        # An offline package without a signature is skipped; online, a missing signature is refused
+        # (the mirror should proxy the .sig that raw.githubusercontent serves).
+        if [ "$OFFLINE" = "1" ]; then
+            log "  $(_t "checksums.sha256.sig not in this offline package — skipping signature verification" "离线包未含 checksums.sha256.sig —— 跳过签名校验")"
+            return 0
+        fi
+        log "  ✗ $(_t "checksums.sha256.sig missing — cannot authenticate the release; refusing to deploy" "checksums.sha256.sig 缺失 —— 无法验证发布真实性，拒绝部署")"
+        return 1
+    fi
+    if openssl dgst -sha256 -verify "$_pk" -signature "$DOWNLOAD_DIR/checksums.sha256.sig" "$DOWNLOAD_DIR/checksums.sha256" >/dev/null 2>&1; then
+        log "  ✓ $(_t "release signature OK (checksums.sha256 authentic)" "发布签名校验通过（checksums.sha256 真实）")"
+        return 0
+    fi
+    log "  ✗ $(_t "release signature INVALID: checksums.sha256 not authentic (possible mirror/man-in-the-middle tampering)" "发布签名无效：checksums.sha256 不真实（疑似镜像/中间人篡改）")"
+    return 1
 }
 
 # ── Content verification: sha256 fingerprint (primary) + semantic feature (fallback) ──
@@ -1254,6 +1321,9 @@ verify_one() {
 }
 
 log "$(_t "Verifying downloaded files (sha256 fingerprint + semantic features, to block proxy-cached old builds)..." "校验下载文件内容（sha256 指纹 + 语义特征，防止代理缓存旧版本）...")"
+# 先校验发布签名（真实性），再逐文件比对（完整性/防缓存旧版）
+# Verify the release signature (authenticity) before the per-file sha256 check (integrity / stale-cache).
+verify_release_sig || _fail=1
 _fail=0
 verify_one "files/luci/controller/adguardhome.lua"                  "$DOWNLOAD_DIR/luci/controller/adguardhome.lua" || _fail=1
 verify_one "files/luci/menu.d/luci-app-adguardhome-dashboard.json" "$DOWNLOAD_DIR/luci/menu.d/luci-app-adguardhome-dashboard.json" || _fail=1

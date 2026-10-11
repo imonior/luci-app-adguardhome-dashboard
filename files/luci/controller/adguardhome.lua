@@ -88,6 +88,31 @@ local DASH_FILES = {
     { src = "manifest.json",                            dst = "/usr/share/adguardhome-dashboard/manifest.json",  base = "manifest.json",          kind = "json", min_size = 20 }
 }
 
+-- ── Signed release fingerprint (supply-chain authenticity) ──
+-- RSA-4096 public key; the DER's SHA-256 is 19db76d6…ba85ac62. The private key lives only
+-- in CI (a secret) and signs checksums.sha256 at release time. The runner below verifies
+-- checksums.sha256.sig against THIS pinned key, so a malicious mirror / man-in-the-middle
+-- cannot forge the manifest even though it serves both the files and the checksum list.
+-- 发布指纹签名（供应链真实性）：RSA-4096 公钥，DER 的 sha256 为 19db76d6…ba85ac62。
+-- 私钥仅存于 CI（密钥），发布时对 checksums.sha256 签名。runner 用本钉死公钥验签，
+-- 因此即便恶意镜像同时提供文件与清单，也因拿不到私钥而无法伪造。
+local DASH_SIGN_PUBKEY = {
+    "-----BEGIN PUBLIC KEY-----",
+    "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAr7CmZj3wzKCeqv1HlFN2",
+    "CbHTFW5N715tWlFjjaGgImqGbksrOQjY3L4w+W9LY956di4WDR/sO3Jjx/lf/eyG",
+    "WuG3wj7+RAfXVPA4iFWpGRVdcHuaKpBGS1JVd7Hul5fl1lLpkoAnPYczT1aB00mN",
+    "HiJpsmXHrwZenN9Y1URfszhM3pxpxueBotTHrf7SwmBGdw9XN4X86IdMP3QnyxvI",
+    "tddB7ClGq19Y+2x1r74bKpp9imAxPs+FicZZfVkBQcPwsG4DmwlZZ1x1NMkV8DO6",
+    "hzwkh/kik8yvC7dBaiGwROKN7EI3fF/YMMk6wgUy96vD/C0Hm2SODbqkDz6zHbV+",
+    "Yf55HeT/KxqwSB0SRfnsTOWSq1LiW93ZRnGQB/iUsqFoUpfYbAjwsmHOxA6RtIGD",
+    "7dylVRHdc3DjZ98zVWCXyOMuvEnLdDDpEcmtxK/0pAcfFpfcZrpFgc36paAFbzPM",
+    "A5QBr2/GT4lXrPA9F/38xFQIK/MfehA3HEV7AlUwZLXxP9MIOOavbSa6hR4RK9VT",
+    "ZkR1x47epe/ymO6/dkOxLykAoQ9gWo0Rusrgb2jtDGSwVrFxWv9lOWunTBTBYXHV",
+    "omufZwCkUB59ZUzn/FsiyilEoNHZMlKBZ+87ZEGhSxJM1mkgdaqzhVANvzLnFkf0",
+    "+5vvsivQ2lTAEErm0dnH6nMCAwEAAQ==",
+    "-----END PUBLIC KEY-----",
+}
+
 -- 代理规格（wire 格式，与 install.sh / 面板共用；持久化于 /etc/adguardhome-dashboard.proxy）：
 --   mirror|<prefix>  镜像源：把原 URL 拼到前缀后面（**仅中国大陆有效**）
 --   proxy|<addr>     全量代理服务器：curl -x，URL 不变（类似系统代理，任意地区可用）
@@ -291,19 +316,31 @@ function index()
     -- authtoken) never runs — destructive calls like delete/upgrade/set_proxy could be fired
     -- with a GET. The front end's request.post always ships the token, so this is compatible.
     entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, nil)
-    entry({"admin", "services", "adguardhome", "action"}, post("do_action"), nil, nil)
-    entry({"admin", "services", "adguardhome", "set_proxy"}, post("set_proxy"), nil, nil)
+    entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, nil)
+    entry({"admin", "services", "adguardhome", "set_proxy"}, call("set_proxy"), nil, nil)
     entry({"admin", "services", "adguardhome", "proxy_test"}, call("proxy_test"), nil, nil)
     entry({"admin", "services", "adguardhome", "geo_probe"}, call("geo_probe"), nil, nil)
     entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, nil)
-    entry({"admin", "services", "adguardhome", "upgrade"}, post("do_upgrade"), nil, nil)
+    entry({"admin", "services", "adguardhome", "upgrade"}, call("do_upgrade"), nil, nil)
     entry({"admin", "services", "adguardhome", "check_dashboard_update"}, call("check_dashboard_update"), nil, nil)
-    entry({"admin", "services", "adguardhome", "upgrade_dashboard"}, post("do_upgrade_dashboard"), nil, nil)
+    entry({"admin", "services", "adguardhome", "upgrade_dashboard"}, call("do_upgrade_dashboard"), nil, nil)
     entry({"admin", "services", "adguardhome", "backups"}, call("list_backups"), nil, nil)
-    entry({"admin", "services", "adguardhome", "restore_backup"}, post("restore_backup"), nil, nil)
-    entry({"admin", "services", "adguardhome", "delete_backup"}, post("delete_backup"), nil, nil)
+    entry({"admin", "services", "adguardhome", "restore_backup"}, call("restore_backup"), nil, nil)
+    entry({"admin", "services", "adguardhome", "delete_backup"}, call("delete_backup"), nil, nil)
     entry({"admin", "services", "adguardhome", "log"}, call("get_log"), nil, nil)
-    entry({"admin", "services", "adguardhome", "clear_log"}, post("clear_log"), nil, nil)
+    entry({"admin", "services", "adguardhome", "clear_log"}, call("clear_log"), nil, nil)
+    -- ⚠ 必须用 call()，不要用 post()：前端走 LuCI RPC 客户端 request.post，token 经
+    --   X-CSRF-Token 请求头发送；而 dispatcher 的 post() 目标只在 target.post==true 时触发
+    --   test_post_security()，它只认表单体里的 token（http.formvalue("token")），RPC 客户端
+    --   永远不会在表单体带 token → 始终 403、handler 永不执行。v2.6.4 误将全部写操作路由
+    --   改成 post() 造成全量 403 回归（升级/核心升级/备份恢复删除/代理/clear_log/action 全失效），
+    --   v2.6.2/2.6.3 用 call() 时一切正常。RPC 层的头 token 已提供 CSRF 防护，call() 同样受保护。
+    --   WARNING: use call(), never post(): the frontend uses LuCI's RPC client request.post which
+    --   sends the CSRF token via the X-CSRF-Token header; dispatcher's post() target only triggers
+    --   test_post_security() when target.post==true, and that check reads the form-body token
+    --   (http.formvalue("token")) which the RPC client never sets -> always 403, handler never runs.
+    --   The v2.6.4 switch to post() broke every write route; call() (as in v2.6.2/2.6.3) works and
+    --   stays CSRF-protected via the RPC header token.
 end
 
 function get_status()
@@ -1318,6 +1355,15 @@ dl_disp() {
 }
 ]==])
     add("")
+    -- 钉死的发布公钥（信任锚 = 已安装的插件本体，不来自镜像）；runner 用它对清单验签。
+    -- The pinned release public key (trust anchor = the installed plugin itself, never from the mirror);
+    -- the runner uses it to verify the manifest signature.
+    add("SIG=\"$TMPDIR/checksums.sha256.sig\"")
+    add("PUBKEY_FILE=\"$TMPDIR/dash_pub.pem\"")
+    add("cat > \"$PUBKEY_FILE\" <<'LUACI_PUBKEY'")
+    for _, l in ipairs(DASH_SIGN_PUBKEY) do add(l) end
+    add("LUACI_PUBKEY")
+    add("")
     add("mkdir -p \"$TMPDIR\"")
     add("cleanup() { rm -rf \"$TMPDIR\" 2>/dev/null; rm -f /tmp/agh_dashboard_upgrade_runner.sh 2>/dev/null; }")
     add("trap 'cleanup' EXIT INT TERM")
@@ -1381,6 +1427,17 @@ dl_disp() {
     add("    return 1")
     add("  fi")
     add("  return 0")
+    add("}")
+    add("")
+    -- 发布指纹验签：用钉死公钥校验 checksums.sha256.sig。openssl 缺失或验签失败 → 拒绝部署（fail-closed）。
+    -- Release fingerprint verification: verify checksums.sha256.sig against the pinned key.
+    -- Missing openssl or a failed verify means refuse to deploy (fail-closed).
+    add("verify_sig() {")
+    add("  command -v openssl >/dev/null 2>&1 || { echo \"   [verify] openssl missing: cannot verify signature, refusing to deploy (opkg install openssl-util)\" >> \"$LOG\"; return 1; }")
+    add("  [ -f \"$SIG\" ] || { echo \"   [verify] checksums.sha256.sig missing\" >> \"$LOG\"; return 1; }")
+    add("  if openssl dgst -sha256 -verify \"$PUBKEY_FILE\" -signature \"$SIG\" \"$CHECKSUMS\" >/dev/null 2>&1; then return 0; fi")
+    add("  echo \"   [verify] signature INVALID: checksums.sha256 not authentic (possible mirror/man-in-the-middle tampering)\" >> \"$LOG\"")
+    add("  return 1")
     add("}")
     add("")
     add("download_one() {")
@@ -1450,6 +1507,11 @@ dl_disp() {
     -- 'list_backups') that forged content can satisfy with a single extra line. Better to
     -- abort and roll back than to deploy files that were never sha256-compared.
     add("download_one 'checksums.sha256' \"$CHECKSUMS\" || fail_task 'download checksums.sha256 (refusing to deploy without sha256 verification)'")
+    -- 先验证清单签名（钉死公钥），再逐文件比对：恶意镜像同时提供文件+清单也无法通过验签。
+    -- Verify the manifest signature (pinned key) BEFORE the per-file loop: a malicious mirror
+    -- serving both files and manifest still cannot forge a signature it can't produce.
+    add("download_one 'checksums.sha256.sig' \"$SIG\" || fail_task 'download checksums.sha256.sig (refusing to deploy without signature)'")
+    add("verify_sig || fail_task 'signature verification failed (checksums.sha256 not authentic)'")
 
     for i = 1, #DASH_FILES do
         local f = DASH_FILES[i]

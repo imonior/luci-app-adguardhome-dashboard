@@ -69,6 +69,22 @@ chmod 755 "$STAGE/scripts/install.sh" "$STAGE/scripts/uninstall.sh"
 # ── junk that must never ship ──
 find "$STAGE" -name '.DS_Store' -delete 2>/dev/null || true
 
+# ── release signature (supply-chain authenticity) ──
+# 发布签名（供应链真实性）：用私钥（CI 密钥 / DASH_SIGN_KEY_FILE）对 checksums.sha256 签名。
+# 私钥绝不进仓库；签名文件必须随仓库提交，raw.githubusercontent 才会对外提供，镜像才能代理到。
+# The private key never enters the repo; the signature file MUST be committed so raw.githubusercontent
+# serves it and mirrors can proxy it.
+if [ -n "$DASH_SIGN_KEY_FILE" ] && [ -f "$DASH_SIGN_KEY_FILE" ]; then
+    openssl dgst -sha256 -sign "$DASH_SIGN_KEY_FILE" -out "checksums.sha256.sig" "checksums.sha256" 2>/dev/null \
+        && echo "==> signed checksums.sha256 -> checksums.sha256.sig" \
+        || { echo "error: signing failed (check DASH_SIGN_KEY_FILE)" >&2; exit 1; }
+elif [ ! -f "checksums.sha256.sig" ]; then
+    echo "warn: checksums.sha256.sig missing and DASH_SIGN_KEY_FILE not set — release will be UNSIGNED (upgrades refuse to deploy)" >&2
+fi
+if [ -f "checksums.sha256.sig" ]; then
+    cp "checksums.sha256.sig" "$STAGE/checksums.sha256.sig"
+fi
+
 # ── offline marker (read by install.sh) ──
 cat > "$STAGE/OFFLINE_PACKAGE" <<EOF
 This directory is a self-contained offline release package of

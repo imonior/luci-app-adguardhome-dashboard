@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.8**
+**v2.6.9**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -284,6 +284,19 @@ curl -fsSL https://raw.githubusercontent.com/imonior/luci-app-adguardhome-dashbo
 
 ---
 
+## Supply-chain integrity (mirror authenticity) / 供应链完整性（镜像真实性）
+
+When you upgrade (or install) through a mirror (`mirror|…`), the files **and** `checksums.sha256` both come from that same mirror. The per-file sha256 check therefore proves **integrity** (no corruption, no truncated download) and blocks a **stale cached build** from a CDN — but it does **not** prove **authenticity**: a malicious mirror (or a man-in-the-middle) can serve a self-consistent `(files, checksums.sha256)` pair, and the hash comparison passes because the checksum list is itself fetched from the attacker.
+
+Starting with **v2.6.9**, `checksums.sha256` is signed at release time and the upgrade runner / installer verify `checksums.sha256.sig` against a **public key pinned inside the shipped plugin and installer**. The private key lives only in CI (a secret), so even a malicious mirror that serves both the files and the manifest cannot forge a valid signature — tampering is detected and the upgrade is refused. Two practical notes:
+
+- **Trust anchor.** Authenticity rests on the pinned key baked into the *installed* plugin (for upgrades) or the *installer you fetched* (for first install). This is the same trust you already place in the GitHub repo / one-click command; it is not a new assumption.
+- **`openssl` is required on the router.** The runner verifies with `openssl dgst -sha256 -verify`. If `openssl` is missing, deployment is **refused** (fail-closed) and the log tells you `opkg install openssl-util`. There is no authenticity guarantee without a verifier, so we do not silently skip.
+
+Mirrors are still a convenience, not a trust boundary: use a mirror you trust, or connect directly to `raw.githubusercontent.com`.
+
+---
+
 ## Backup & Restore
 
 ### Two backup types
@@ -376,6 +389,12 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.6.9**
+  - **Fixed every write action returning HTTP 403 and doing nothing**: dashboard upgrade, core upgrade/reinstall, backup restore/delete, proxy set, and clear-log all silently no-op'd. v2.6.4 had switched those action routes from `call()` to `post()`; LuCI's `post()` triggers `test_post_security()`, which requires the CSRF token in the **form body**, but the RPC client (`request.post`) sends it via the `X-CSRF-Token` **header** — so every write was rejected with 403 and never reached the handler. Reverted all action routes to `call()` (the v2.6.2/2.6.3 form that was confirmed working)
+  - **Added RSA-signed release verification (supply-chain authenticity)**: `checksums.sha256` is now signed at release time, and the upgrade runner / installer verify `checksums.sha256.sig` against a **public key pinned in the plugin and the installer** before deploying. A malicious mirror or man-in-the-middle that serves both the files and the checksum list still cannot forge the signature (it never sees the private key), so tampering is detected and the upgrade is refused — closing the self-referential-checksum gap documented in the Security section
+  - **Fail-closed on the router**: if `openssl` is missing, deployment is refused and the log tells you `opkg install openssl-util` — without a verifier there is no authenticity guarantee, so we refuse rather than silently skip
+  - The earlier "upgrade did nothing" reports were two distinct bugs: the v2.6.8 guard fix addressed the *button-click* path; this release fixes the *route/CSRF* path that actually blocked the backend. Manifest bumped to 2.6.9; `checksums.sha256` regenerated and now signed
 
 - **v2.6.8**
   - **Fixed the backup "Restore" and "Delete" buttons doing nothing**: the destructive-action guard latched on and then swallowed the click with a bare `return` — no request, no error, no notification. Reproduced with a jsdom harness running the real module: after a successful "Restore", `_actionBusy` stayed set because its *only* reset path was a completion marker appearing in the exec log, and a concurrent "check for update" truncates that log via `log_start`. The next "Delete" click was therefore discarded in silence
