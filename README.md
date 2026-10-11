@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.7**
+**v2.6.8**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -376,6 +376,14 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.6.8**
+  - **Fixed the backup "Restore" and "Delete" buttons doing nothing**: the destructive-action guard latched on and then swallowed the click with a bare `return` — no request, no error, no notification. Reproduced with a jsdom harness running the real module: after a successful "Restore", `_actionBusy` stayed set because its *only* reset path was a completion marker appearing in the exec log, and a concurrent "check for update" truncates that log via `log_start`. The next "Delete" click was therefore discarded in silence
+  - **The guard can no longer fail silently**: a blocked click now raises an explicit notification ("an operation is in progress — please wait") instead of nothing at all, and a watchdog releases the lock automatically after 120 s (with a notice) if the reset path ever breaks again. Arming and releasing now go through `_armBusy()` / `_releaseBusy()` (time-stamped) so every arm has a paired release
+  - **"Upgrade dashboard" failed the same way** — it is guarded by the same code, so a click could be swallowed with the confirm modal simply staying open and no request being sent; that is also why the log area stayed empty (the runner never started). It is fixed by the same change: you now get feedback instead of dead silence, and the lock expires on its own
+  - **"Restore" confirmation moved from the native `window.confirm` to LuCI's `ui.showModal`**, matching every other dialog in this panel — browsers suppress repeated native dialogs, which made the click look dead. A 90 s fallback timer also stops the guard reset from depending solely on a log marker
+  - **Log polling is no longer completely silent on failure**: 5 consecutive `fetchLog` failures now stop the poll, release the guard, and surface an error
+  - 4 new i18n strings; both `.po` files updated and both `.lmo` recompiled. Version bumped to 2.6.8; `checksums.sha256` regenerated. No backend (Lua) changes
 
 - **v2.6.7**
   - **Fixed "Clear Cache & Reload" still not switching to the new view on Safari / router uhttpd**: v2.6.5/2.6.6 relied on `fetch(..., {cache:'reload'})` writing the fresh file back into the HTTP disk cache, then `location.reload()` expecting the navigation to pick up that entry. But `cache:'reload'` writes back asynchronously, and on Safari / router uhttpd that write is unreliable — the navigation reads the stale entry first, so the old view came back. Only DevTools "Disable cache" worked, because it skips the cache lookup entirely and therefore sends no conditional headers

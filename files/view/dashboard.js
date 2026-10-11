@@ -7,7 +7,7 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.6.7";
+var DASHBOARD_VIEW_VERSION = "2.6.8";
 /* 本视图 JS 的部署路径（自修复时用于绕过 HTTP 缓存重新拉取自己）
  * Deployed path of this view JS (used by the self-heal to re-fetch itself past the HTTP cache). */
 var VIEW_JS_URL = "/luci-static/resources/view/adguardhome/dashboard.js";
@@ -133,6 +133,10 @@ var _EN = {
     '恢复失败': 'Restore failed',
     '确定删除此备份吗？此操作不可撤销。': 'Confirm delete this backup? This action cannot be undone.',
     '删除失败': 'Delete failed',
+    '确认恢复备份': 'Confirm Restore from Backup',
+    '确认删除备份': 'Confirm Delete Backup',
+    '操作进行中，请稍候；若长时间无响应请刷新页面': 'An operation is in progress - please wait; refresh the page if there is no response for a long time',
+    '操作超时，已自动解除锁定，请重试': 'Operation timed out - the lock was released automatically, please retry',
     '网络错误': 'Network error',
     '网络出口检测': 'Network Egress Detection',
     '检测中...': 'Detecting...',
@@ -248,6 +252,15 @@ return view.extend({
 
     /* 客户端防抖（防止用户连点 start/stop/restart/upgrade 等按钮产生重复请求） / Client-side debounce (prevent duplicate requests from rapid clicks on start/stop/restart/upgrade buttons) */
     _actionBusy: false,
+    /* _actionBusy 置位时刻，配合 _actionLocked 的看门狗：复位路径一旦断掉
+       （日志被并发的「检查更新」截断、轮询静默失败等），超时后自动解锁，
+       保证破坏性操作不会被永久吞掉。
+       Timestamp of when _actionBusy was armed. Together with the watchdog in _actionLocked,
+       a broken reset path (log truncated by a concurrent "check update", a silently failing
+       poll, ...) auto-unlocks on timeout so destructive actions are never swallowed forever. */
+    _actionBusyAt: 0,
+    /* 恢复任务的兜底定时器句柄 / Handle of the restore fallback timer */
+    _restoreWatchdog: null,
 
     /* ── Panel upgrade component ── */
     dashCurrVerEl: null,
@@ -346,57 +359,105 @@ return view.extend({
         var self = this;
         /* 守卫：恢复期间不允许再次提交（后端 runner 走固定路径，并发会互相覆盖）。
            Guard: no new submission while a restore is running (backend runners use fixed paths
-           and would overwrite each other). _actionBusy is reset by startLogPolling once the
-           restore-completion marker appears in the log. */
+           and would overwrite each other). */
         if (this._actionLocked()) return;
-        self._actionBusy = true;
-        if (!window.confirm(T('确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。') + '\n\n' + dir)) {
-            self._actionBusy = false;
-            return;
-        }
-        request.post(L.url('admin/services/adguardhome/restore_backup'), { dir: dir }).then(function(res) {
-            return res.json();
-        }).then(function(d) {
-            if (d && d.success) {
-                if (self.backupsListEl) self.backupsListEl.appendChild(E('div', { style: 'padding:8px;color:#2dca73' }, T('恢复中，请稍候...')));
-                /* startLogPolling 统一处理恢复完成检测（=== Restore from /root/agh_backup / 恢复完成）+ 页面刷新 / startLogPolling uniformly handles restore-completion detection (=== Restore from /root/agh_backup / 恢复完成) + page refresh */
-                self.startLogPolling();
-            } else {
-                /* 恢复启动失败：立即复位，避免守卫永久卡死 / restore failed to start: release immediately */
-                self._actionBusy = false;
-                ui.addNotification(null, (d && d.error) || T('恢复失败'), 'error');
-            }
-        }).catch(function() {
-            self._actionBusy = false;
-            ui.addNotification(null, T('网络错误'), 'error');
+        self._armBusy();
+        /* 用 LuCI 的 ui.showModal 取代 window.confirm：原生对话框会被浏览器屏蔽
+           （勾选「阻止此页面创建更多对话框」后 confirm 直接返回 false），点了却毫无反应，
+           且与面板其它确认（升级面板）风格不一致。
+           Use LuCI's ui.showModal instead of window.confirm: browsers can suppress native
+           dialogs (once "prevent this page from creating additional dialogs" is ticked,
+           confirm just returns false), which looks like a dead button, and it is inconsistent
+           with the other confirmation in the panel (dashboard upgrade). */
+        var title = T('确认恢复备份');
+        var btn = E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px' }, T('恢复'));
+        btn.addEventListener('click', function() {
+            if (btn.disabled) return;
+            btn.disabled = true;
+            btn.textContent = T('处理中...');
+            ui.hideModal();
+            request.post(L.url('admin/services/adguardhome/restore_backup'), { dir: dir }).then(function(res) {
+                return res.json();
+            }).then(function(d) {
+                if (d && d.success) {
+                    if (self.backupsListEl) self.backupsListEl.appendChild(E('div', { style: 'padding:8px;color:#2dca73' }, T('恢复中，请稍候...')));
+                    /* startLogPolling 统一处理恢复完成检测（=== Restore from /root/agh_backup / 恢复完成）+ 页面刷新 / startLogPolling uniformly handles restore-completion detection (=== Restore from /root/agh_backup / 恢复完成) + page refresh */
+                    self.startLogPolling();
+                    /* 兜底定时器：不能把守卫复位完全押在日志完成标记上。并发的「检查更新」
+                       会 log_start 截断 EXEC_LOG，一旦完成标记被抹掉，守卫就永久置位，
+                       此后「恢复 / 删除」会被静默吞掉（v2.6.7 就是这么坏的）。
+                       Fallback timer: the guard reset must not depend solely on the log
+                       completion marker. A concurrent "check update" truncates EXEC_LOG via
+                       log_start; if the marker is wiped the guard stays armed forever and
+                       "restore / delete" get silently swallowed (this is exactly the v2.6.7 bug). */
+                    if (self._restoreWatchdog) clearTimeout(self._restoreWatchdog);
+                    self._restoreWatchdog = setTimeout(function() {
+                        self._restoreWatchdog = null;
+                        if (self._actionBusy) {
+                            self._releaseBusy();
+                            ui.addNotification(null, T('操作超时，已自动解除锁定，请重试'), 'error');
+                        }
+                    }, 90000);
+                } else {
+                    /* 恢复启动失败：立即复位，避免守卫永久卡死 / restore failed to start: release immediately */
+                    self._releaseBusy();
+                    ui.addNotification(null, (d && d.error) || T('恢复失败'), 'error');
+                }
+            }).catch(function() {
+                self._releaseBusy();
+                ui.addNotification(null, T('网络错误'), 'error');
+            });
         });
+        ui.showModal(E('h4', {}, title), [
+            E('p', {}, T('确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。')),
+            E('p', { style: 'font-family:monospace;word-break:break-all;font-size:12px' }, dir),
+            E('div', { style: 'text-align:right; margin-top:15px;' }, [
+                E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); self._releaseBusy(); } }, T('取消')),
+                btn
+            ])
+        ]);
     },
 
     confirmDelete: function(dir, name) {
         var self = this;
         if (this._actionLocked()) return;
-        self._actionBusy = true;
-        if (!window.confirm(T('确定删除此备份吗？此操作不可撤销。') + '\n\n' + dir)) {
-            self._actionBusy = false;
-            return;
-        }
-        request.post(L.url('admin/services/adguardhome/delete_backup'), { dir: dir }).then(function(res) {
-            return res.json();
-        }).then(function(d) {
-            /* 删除是短操作，请求返回即复位（无日志轮询跟踪） / delete is short; reset as soon as the request returns */
-            self._actionBusy = false;
-            /* 后端现在会如实回报（此前 ok 恒为 true，删除失败也显示成功）。
-               The backend now reports honestly (ok used to be always true, so a failed delete
-               still showed as a success). */
-            if (d && d.success) {
-                self.fetchBackups();
-            } else {
-                ui.addNotification(null, (d && d.error) || T('删除失败'), 'error');
-            }
-        }).catch(function() {
-            self._actionBusy = false;
-            ui.addNotification(null, T('网络错误'), 'error');
+        self._armBusy();
+        /* 同 confirmRestore：改用 ui.showModal，避免原生对话框被屏蔽后点击毫无反应。
+           Same as confirmRestore: use ui.showModal so a suppressed native dialog cannot make
+           the click look dead. */
+        var title = T('确认删除备份');
+        var btn = E('button', { class: 'btn cbi-button cbi-button-negative', style: 'margin-left:10px' }, T('删除'));
+        btn.addEventListener('click', function() {
+            if (btn.disabled) return;
+            btn.disabled = true;
+            btn.textContent = T('处理中...');
+            ui.hideModal();
+            request.post(L.url('admin/services/adguardhome/delete_backup'), { dir: dir }).then(function(res) {
+                return res.json();
+            }).then(function(d) {
+                /* 删除是短操作，请求返回即复位（无日志轮询跟踪） / delete is short; reset as soon as the request returns */
+                self._releaseBusy();
+                /* 后端现在会如实回报（此前 ok 恒为 true，删除失败也显示成功）。
+                   The backend now reports honestly (ok used to be always true, so a failed delete
+                   still showed as a success). */
+                if (d && d.success) {
+                    self.fetchBackups();
+                } else {
+                    ui.addNotification(null, (d && d.error) || T('删除失败'), 'error');
+                }
+            }).catch(function() {
+                self._releaseBusy();
+                ui.addNotification(null, T('网络错误'), 'error');
+            });
         });
+        ui.showModal(E('h4', {}, title), [
+            E('p', {}, T('确定删除此备份吗？此操作不可撤销。')),
+            E('p', { style: 'font-family:monospace;word-break:break-all;font-size:12px' }, dir),
+            E('div', { style: 'text-align:right; margin-top:15px;' }, [
+                E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); self._releaseBusy(); } }, T('取消')),
+                btn
+            ])
+        ]);
     },
 
     fetchStatus: function() {
@@ -489,13 +550,51 @@ return view.extend({
      * while the upgrade/restore log poll is running. The backend runners live at fixed paths,
      * so a repeat submission overwrites the script currently executing and spawns a second
      * process, leaving the core or the panel files half-updated. */
+    _armBusy: function() {
+        this._actionBusy = true;
+        this._actionBusyAt = Date.now();
+        /* 新的破坏性操作覆盖旧的恢复兜底定时器，避免它去解锁另一个操作 /
+           A new destructive action supersedes the restore fallback timer, so it cannot
+           release the guard of a different, still-running operation. */
+        if (this._restoreWatchdog) {
+            clearTimeout(this._restoreWatchdog);
+            this._restoreWatchdog = null;
+        }
+    },
+
+    _releaseBusy: function() {
+        this._actionBusy = false;
+        this._actionBusyAt = 0;
+        if (this._restoreWatchdog) {
+            clearTimeout(this._restoreWatchdog);
+            this._restoreWatchdog = null;
+        }
+    },
+
     _actionLocked: function() {
         // Only block while a destructive action is genuinely in progress. Passive log polling
         // (e.g. a version check) must NOT arm the guard, otherwise the natural "check -> upgrade"
         // flow gets its confirmation silently swallowed during the poll window.
         // 仅当破坏性操作真正进行中才拦截。被动日志轮询（如检查更新）不得武装守卫，否则
         // 「检查→升级」的自然流程会在轮询窗口内被静默吞掉确认（v2.6.4 回归）。
-        return !!this._actionBusy;
+        if (!this._actionBusy) return false;
+        /* 看门狗：置位超过 2 分钟仍未复位，说明复位路径已断（日志被并发的「检查更新」
+           log_start 截断导致完成标记丢失、轮询 fetchLog 一直失败等）。此时自动解锁并提示，
+           否则「恢复 / 删除 / 升级」会被永久静默吞掉，用户完全得不到反馈。
+           Watchdog: still armed after 2 minutes means the reset path is broken (the completion
+           marker was lost because a concurrent "check update" log_start truncated the log, the
+           fetchLog poll keeps failing, ...). Unlock automatically and notify — otherwise
+           "restore / delete / upgrade" stay silently swallowed with zero feedback. */
+        if (this._actionBusyAt && (Date.now() - this._actionBusyAt > 120000)) {
+            this._releaseBusy();
+            ui.addNotification(null, T('操作超时，已自动解除锁定，请重试'), 'error');
+            return false;
+        }
+        /* 被拦截时不再静默 return：明确告知用户（此前静默吞掉，是这类问题排查困难的根因）。
+           No longer a silent return when blocked: tell the user explicitly (the silent swallow
+           was the root cause of how hard these issues were to diagnose). */
+        ui.addNotification(null, T('操作进行中，请稍候；若长时间无响应请刷新页面'), 'info');
+        return true;
     },
 
     fetchLog: function() {
@@ -1461,12 +1560,12 @@ return view.extend({
         var btn = E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px' }, title);
         btn.addEventListener('click', function() {
             if (btn.disabled || self._actionLocked()) return;
-            self._actionBusy = true;
+            self._armBusy();
             btn.disabled = true;
             btn.textContent = T('处理中...');
             ui.hideModal();
             var release = function() {
-                self._actionBusy = false;
+                self._releaseBusy();
                 btn.disabled = false;
                 btn.textContent = title;
             };
@@ -1660,6 +1759,7 @@ return view.extend({
         this.logPollInterval = setInterval(function() {
             pollCount++;
             self.fetchLog().then(function(data) {
+                self._logPollFail = 0;   /* 拉到日志即清零失败计数 / reset the failure counter on a good pull */
                 /* 三段各自渲染：第一部分清除重载，第二、三部分滚动追加 / render three segments: part1 clear+reload, parts2&3 scroll-append */
                 self._renderLog(data);
                 if (data && data.exec_log) {
@@ -1688,17 +1788,32 @@ return view.extend({
                         clearInterval(self.logPollInterval);
                         self.logPollInterval = null;
                         /* 破坏性操作完成：解除守卫，允许后续操作 / destructive action finished: release the guard */
-                        self._actionBusy = false;
+                        self._releaseBusy();
                         /* 升级结束：恢复用户之前开启的自动刷新 / Upgrade end: resume the auto-refresh the user had enabled */
                         self._autoRefreshPaused = false;
                     }
                 }
-            }).catch(function() {});
+            }).catch(function() {
+                /* 轮询失败不能全静默：一旦 fetchLog 持续失败，完成标记永远读不到，
+                   守卫就一直置位，「恢复 / 删除」双双失效且用户零反馈。
+                   Polling failures must not be fully silent: if fetchLog keeps failing the
+                   completion marker is never seen, so the guard stays armed and both
+                   "restore" and "delete" stop working with zero feedback. */
+                self._logPollFail = (self._logPollFail || 0) + 1;
+                if (self._logPollFail >= 5) {
+                    clearInterval(self.logPollInterval);
+                    self.logPollInterval = null;
+                    self._logPollFail = 0;
+                    self._releaseBusy();
+                    self._autoRefreshPaused = false;
+                    ui.addNotification(null, T('网络错误'), 'error');
+                }
+            });
             if (pollCount >= 150) {
                 clearInterval(self.logPollInterval);
                 self.logPollInterval = null;
                 /* 轮询超时兜底：同样解除守卫，避免永久卡死 / safety: also release the guard */
-                self._actionBusy = false;
+                self._releaseBusy();
                 self._autoRefreshPaused = false;
             }
         }, 2000);
@@ -1706,11 +1821,11 @@ return view.extend({
 
     execAction: function(action) {
         var self = this;
-        if (this._actionBusy) return;   // 防抖：快速连点忽略 / debounce: ignore rapid repeated clicks
-        this._actionBusy = true;
+        if (this._actionLocked()) return;   // 防抖：快速连点忽略 / debounce: ignore rapid repeated clicks
+        this._armBusy();
         ui.showModal(E('h4', {}, T('执行中...')), [E('p', { class: 'spinning' }, action)]);
         this.sendAction(action).then(function(res) {
-            self._actionBusy = false;
+            self._releaseBusy();
             ui.hideModal();
             if (res && res.success) {
                 ui.addNotification(null, T('操作执行成功'), 'info');
@@ -1724,7 +1839,7 @@ return view.extend({
             /* 按钮点击后重新加载日志三段：第一部分(状态)清除重载，第二、三部分滚动追加 / after a button click, reload the three log segments: part1 clear+reload, parts2&3 scroll-append */
             self.refreshLog();
         }).catch(function(err) {
-            self._actionBusy = false;
+            self._releaseBusy();
             ui.hideModal();
             ui.addNotification(null, T('执行异常: ') + (err.message || err), 'error');
             self.refreshLog();
@@ -1764,12 +1879,12 @@ return view.extend({
         var btn = E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px' }, title);
         btn.addEventListener('click', function() {
             if (btn.disabled || self._actionLocked()) return;
-            self._actionBusy = true;
+            self._armBusy();
             btn.disabled = true;
             btn.textContent = T('处理中...');
             ui.hideModal();
             var release = function() {
-                self._actionBusy = false;
+                self._releaseBusy();
                 btn.disabled = false;
                 btn.textContent = title;
             };
@@ -1807,7 +1922,7 @@ return view.extend({
         var btn = E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px' }, title);
         btn.addEventListener('click', function() {
             if (btn.disabled || self._actionLocked()) return;
-            self._actionBusy = true;
+            self._armBusy();
             btn.disabled = true;
             btn.textContent = T('处理中...');
             ui.hideModal();
@@ -1815,7 +1930,7 @@ return view.extend({
             var release = function() {
                 if (released) return;
                 released = true;
-                self._actionBusy = false;
+                self._releaseBusy();
                 btn.disabled = false;
                 btn.textContent = title;
             };

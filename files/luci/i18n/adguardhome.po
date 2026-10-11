@@ -360,6 +360,18 @@ msgstr "Delete this backup? This action cannot be undone."
 msgid "删除失败"
 msgstr "Delete failed"
 
+msgid "确认恢复备份"
+msgstr "Confirm Restore from Backup"
+
+msgid "确认删除备份"
+msgstr "Confirm Delete Backup"
+
+msgid "操作进行中，请稍候；若长时间无响应请刷新页面"
+msgstr "An operation is in progress - please wait; refresh the page if there is no response for a long time"
+
+msgid "操作超时，已自动解除锁定，请重试"
+msgstr "Operation timed out - the lock was released automatically, please retry"
+
 msgid "网络错误"
 msgstr "Network error"
 
