@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.13**
+**v2.7.0**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -378,6 +378,12 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.7.0**
+  - **移除破坏性操作互斥锁——并同时消除了当初引入它的那个竞态。** 自 v2.6.4 起两个升级 runner 都写向**固定路径**（`/tmp/agh_core_upgrade_runner.sh`、`/tmp/agh_dashboard_upgrade_runner.sh`），于是点击**另一个**按钮（升级核心／强制重装／安装核心，各有独立确认框与自己的按钮置灰）会把另一个点击仍在执行的脚本截断、并起第二个进程——互斥锁就只是为了遮住这个问题而存在。现在两个 runner 都改为**唯一路径**（`_PID_TIME_SEQ.sh`，并带存在性探测，保证仍在运行的脚本绝不会被覆盖），并各自清理自己：竞态从根上消失，于是互斥锁、它的 120 秒看门狗、90 秒兜底定时器，以及它们带来的「按钮点了没反应」这一失败模式一并删除。各按钮**仍保留**自己的 `disabled` 保护——那才是真正阻止同一按钮被重复提交的东西
+  - **删除页面内视图热替换**（抓取并在原地重新求值 `dashboard.js`）。它经三轮实测（v2.6.5／2.6.7／2.6.11）均无效，而网页本身无法关闭浏览器的 HTTP 磁盘缓存。现在「清缓存并重载」按钮直接打开手动禁用缓存的引导框；引导的触发点改为 **render 时版本不一致**（`dashboard_version` vs `DASHBOARD_VIEW_VERSION`），不再依赖「热替换失败」。需知其后果：仍卡在旧视图的浏览器需要**手动硬刷新一次**才能加载本版本——旧副本里的按钮修不了自己
+  - **修复一处发布前检查发现、从未发布过的崩溃**：生成脚本里的自清理行 `rm -f '<runner>'` 引用了尚未声明的 `scrpath`，Lua 会因拼接 nil 值而中断核心升级。现已改为在路径就绪后再生成该行
+  - 版本升至 2.7.0；重新生成 `checksums.sha256`
 
 - **v2.6.13**
   - **彻底移除 RSA 发布签名校验——回到 2.6.2 的方式。** 签名功能（v2.6.9 加入）本想对恶意镜像证明发布真实性，但基础 OpenWrt 上的 `openssl` 会把有效签名误报为无效，且把它当硬门禁即便装上 `openssl-util` 仍会卡死升级（发布文件其实在路由器外验证为 `Verified OK`——经代理取回字节一致、桌面 OpenSSL 复现确认）。我们回退到签名前的行为：升级与安装**只做逐文件 sha256 完整性校验**，与 2.6.2 完全一致。它仍能拦住下载损坏与代理缓存旧版，但不再阻断本可成功的升级。钉死公钥、`verify_sig` / `verify_release_sig`、openssl-util 自动安装、以及 `checksums.sha256.sig` 的生成全部移除

@@ -3,6 +3,10 @@ module("luci.controller.adguardhome", package.seeall)
 local util = require "luci.util"
 local fs = require "nixio.fs"
 local http = require "luci.http"
+-- nixio 仅用于取 PID 以生成唯一 runner 路径；取不到就降级为时间戳，绝不因此中断 / nixio is used
+-- only to obtain the PID for unique runner paths; a failure degrades to timestamps, never aborts.
+local ok_nixio, nixio = pcall(require, "nixio")
+if not ok_nixio then nixio = nil end
 
 local BIN_PATHS = {
     "/opt/AdGuardHome/AdGuardHome",
@@ -539,6 +543,40 @@ function check_update()
     http.write_json({ latest_version = latest })
 end
 
+-- 唯一 runner 路径（PID + 时间戳 + 进程内序号）：连点或并发两次升级绝不会互相覆盖正在执行的脚本。
+-- v2.6.3 曾把路径改成固定并假设「单用户无并发」，该假设随后只能靠前端互斥锁去 enforce；
+-- 路径唯一化后竞态从根上消失，锁也就不再需要。
+-- Unique runner path (PID + timestamp + in-process sequence): a repeated or concurrent click can
+-- never overwrite a script that is still executing. v2.6.3 made the path fixed and assumed
+-- "single user, no concurrency" — an assumption that then had to be enforced by a front-end mutex.
+-- With unique paths the race disappears at its root and the mutex is no longer needed.
+local runner_seq = 0
+local function unique_runner_path(base)
+    runner_seq = runner_seq + 1
+    local pid = 0
+    if nixio and nixio.getpid then
+        local ok, v = pcall(nixio.getpid)
+        if ok and type(v) == "number" then pid = v end
+    end
+    if pid == 0 then
+        -- 取不到 PID 时的兜底：CPU 时钟微秒数，避免同秒两次点击撞名 /
+        -- Fallback when the PID is unavailable: microsecond CPU clock, so two clicks within the
+        -- same second cannot collide.
+        pid = math.floor((os.clock() or 0) * 1000000)
+    end
+    -- 最后一道保险：名字必须指向一个尚不存在的文件。这样即使 PID 与时钟都撞了，
+    -- 也绝不会覆盖任何一个仍在执行的 runner 脚本。
+    -- Final safeguard: the name must point at a file that does not exist yet. Even if both the PID
+    -- and the clock collide, an existing (possibly still executing) runner is never overwritten.
+    local p
+    for _ = 1, 100 do
+        p = string.format("%s_%d_%d_%d.sh", base, pid, os.time(), runner_seq)
+        if not fs.access(p) then return p end
+        runner_seq = runner_seq + 1
+    end
+    return p
+end
+
 function launch_core_upgrade(force)
     local bin_path = find_binary()
     local ts = os.date("%Y%m%d_%H%M%S") or ("t" .. os.time())
@@ -899,8 +937,19 @@ fallback_upgrade_via_proxy() {
     add("svc restart >> \"$LOG\" 2>&1 || { svc stop >> \"$LOG\" 2>&1; sleep 1; svc start >> \"$LOG\" 2>&1; }")
     add("echo \"=== core upgrade done (v${OLD_VERSION:-none} -> v${NEW_VERSION:-?}) ===\" >> \"$LOG\"")
 
-    -- 固定路径（非时间戳唯一路径）：单用户家庭路由器无并发升级风险，无需保留历史 runner 脚本 / Fixed path (not timestamped): single-user home-router has no concurrent upgrade risk, no need to retain historical runner scripts
-    local scrpath = "/tmp/agh_core_upgrade_runner.sh"
+    -- 唯一路径（PID+时间戳+序号）：连点/并发不会覆盖正在执行的脚本；成功后脚本自删。
+    -- unlink 后 sh 仍能读完自身，故自删安全。
+    -- Unique path (PID+timestamp+seq): repeated/concurrent clicks cannot overwrite a running script;
+    -- the script removes itself on success (an unlinked file stays readable by the sh holding it).
+    local scrpath = unique_runner_path("/tmp/agh_core_upgrade_runner")
+
+    -- 成功后删掉自身，避免 /tmp 里堆积历史 runner（失败时保留，便于排障）。
+    -- 注意：scrpath 必须先声明再引用——Lua 的 local 从声明处才生效，写在前面会取到 nil 的全局。
+    -- Remove itself on success so /tmp does not accumulate runners (kept on failure for diagnosis).
+    -- Note: scrpath must be declared before use — a Lua local only takes effect at its declaration,
+    -- so referencing it earlier reads the nil global instead.
+    add("rm -f '" .. scrpath .. "' 2>/dev/null")
+
     local f = io.open(scrpath, "w")
     if not f then return false end
     f:write(table.concat(L, "\n"))
@@ -1292,6 +1341,10 @@ function do_upgrade_dashboard()
     local backup_dir = "/root/agh_backup_dashboard_" .. ts
     local tmpdir = "/tmp/agh_dash_new_" .. ts
     local candidates_str = table.concat(PROXY_LIST, " ")
+    -- 唯一路径：连点/并发不会覆盖正在执行的脚本（v2.6.3 的固定路径假设已废弃）
+    -- Unique path: repeated/concurrent clicks cannot overwrite a running script (the v2.6.3
+    -- fixed-path assumption is retired).
+    local scrpath = unique_runner_path("/tmp/agh_dashboard_upgrade_runner")
 
     local L = {}
     local function add(line) L[#L + 1] = line end
@@ -1331,7 +1384,7 @@ dl_disp() {
 ]==])
     add("")
     add("mkdir -p \"$TMPDIR\"")
-    add("cleanup() { rm -rf \"$TMPDIR\" 2>/dev/null; rm -f /tmp/agh_dashboard_upgrade_runner.sh 2>/dev/null; }")
+    add("cleanup() { rm -rf \"$TMPDIR\" 2>/dev/null; rm -f '" .. scrpath .. "' 2>/dev/null; }")
     add("trap 'cleanup' EXIT INT TERM")
     add("")
     add("verify_file() {")
@@ -1537,9 +1590,6 @@ dl_disp() {
     add("/etc/init.d/rpcd restart 2>/dev/null >> \"$LOG\" 2>&1 || true")
     add("/etc/init.d/uhttpd restart 2>/dev/null >> \"$LOG\" 2>&1 || true")
     add("echo '=== dashboard upgrade done (v" .. get_installed_version() .. " -> upstream) ===' >> \"$LOG\"")
-    -- 固定路径（非时间戳唯一路径）：单用户家庭路由器无并发升级风险，无需保留历史 runner 脚本 / Fixed path (not timestamped): single-user home-router has no concurrent upgrade risk, no need to retain historical runner scripts
-
-    local scrpath = "/tmp/agh_dashboard_upgrade_runner.sh"
     local f = io.open(scrpath, "w")
     if not f then
         http.prepare_content("application/json")

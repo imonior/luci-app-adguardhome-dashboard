@@ -7,10 +7,9 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.6.13";
+var DASHBOARD_VIEW_VERSION = "2.7.0";
 /* 本视图 JS 的部署路径（自修复时用于绕过 HTTP 缓存重新拉取自己）
  * Deployed path of this view JS (used by the self-heal to re-fetch itself past the HTTP cache). */
-var VIEW_JS_URL = "/luci-static/resources/view/adguardhome/dashboard.js";
 
 /* ── Client-side translation fallback ── */
 var _EN = {
@@ -258,18 +257,6 @@ return view.extend({
     proxyGlobalTestBtn: null,
     proxyBusy: false,
 
-    /* 客户端防抖（防止用户连点 start/stop/restart/upgrade 等按钮产生重复请求） / Client-side debounce (prevent duplicate requests from rapid clicks on start/stop/restart/upgrade buttons) */
-    _actionBusy: false,
-    /* _actionBusy 置位时刻，配合 _actionLocked 的看门狗：复位路径一旦断掉
-       （日志被并发的「检查更新」截断、轮询静默失败等），超时后自动解锁，
-       保证破坏性操作不会被永久吞掉。
-       Timestamp of when _actionBusy was armed. Together with the watchdog in _actionLocked,
-       a broken reset path (log truncated by a concurrent "check update", a silently failing
-       poll, ...) auto-unlocks on timeout so destructive actions are never swallowed forever. */
-    _actionBusyAt: 0,
-    /* 恢复任务的兜底定时器句柄 / Handle of the restore fallback timer */
-    _restoreWatchdog: null,
-
     /* ── Panel upgrade component ── */
     dashCurrVerEl: null,
     dashLatestVerEl: null,
@@ -365,11 +352,6 @@ return view.extend({
 
     confirmRestore: function(dir, name) {
         var self = this;
-        /* 守卫：恢复期间不允许再次提交（后端 runner 走固定路径，并发会互相覆盖）。
-           Guard: no new submission while a restore is running (backend runners use fixed paths
-           and would overwrite each other). */
-        if (this._actionLocked()) return;
-        self._armBusy();
         /* 用 LuCI 的 ui.showModal 取代 window.confirm：原生对话框会被浏览器屏蔽
            （勾选「阻止此页面创建更多对话框」后 confirm 直接返回 false），点了却毫无反应，
            且与面板其它确认（升级面板）风格不一致。
@@ -391,28 +373,10 @@ return view.extend({
                     if (self.backupsListEl) self.backupsListEl.appendChild(E('div', { style: 'padding:8px;color:#2dca73' }, T('恢复中，请稍候...')));
                     /* startLogPolling 统一处理恢复完成检测（=== Restore from /root/agh_backup / 恢复完成）+ 页面刷新 / startLogPolling uniformly handles restore-completion detection (=== Restore from /root/agh_backup / 恢复完成) + page refresh */
                     self.startLogPolling();
-                    /* 兜底定时器：不能把守卫复位完全押在日志完成标记上。并发的「检查更新」
-                       会 log_start 截断 EXEC_LOG，一旦完成标记被抹掉，守卫就永久置位，
-                       此后「恢复 / 删除」会被静默吞掉（v2.6.7 就是这么坏的）。
-                       Fallback timer: the guard reset must not depend solely on the log
-                       completion marker. A concurrent "check update" truncates EXEC_LOG via
-                       log_start; if the marker is wiped the guard stays armed forever and
-                       "restore / delete" get silently swallowed (this is exactly the v2.6.7 bug). */
-                    if (self._restoreWatchdog) clearTimeout(self._restoreWatchdog);
-                    self._restoreWatchdog = setTimeout(function() {
-                        self._restoreWatchdog = null;
-                        if (self._actionBusy) {
-                            self._releaseBusy();
-                            ui.addNotification(null, T('操作超时，已自动解除锁定，请重试'), 'error');
-                        }
-                    }, 90000);
                 } else {
-                    /* 恢复启动失败：立即复位，避免守卫永久卡死 / restore failed to start: release immediately */
-                    self._releaseBusy();
                     ui.addNotification(null, (d && d.error) || T('恢复失败'), 'error');
                 }
             }).catch(function() {
-                self._releaseBusy();
                 ui.addNotification(null, T('网络错误'), 'error');
             });
         });
@@ -420,7 +384,7 @@ return view.extend({
             E('p', {}, T('确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。')),
             E('p', { style: 'font-family:monospace;word-break:break-all;font-size:12px' }, dir),
             E('div', { style: 'text-align:right; margin-top:15px;' }, [
-                E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); self._releaseBusy(); } }, T('取消')),
+                E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
                 btn
             ])
         ]);
@@ -428,8 +392,6 @@ return view.extend({
 
     confirmDelete: function(dir, name) {
         var self = this;
-        if (this._actionLocked()) return;
-        self._armBusy();
         /* 同 confirmRestore：改用 ui.showModal，避免原生对话框被屏蔽后点击毫无反应。
            Same as confirmRestore: use ui.showModal so a suppressed native dialog cannot make
            the click look dead. */
@@ -443,8 +405,6 @@ return view.extend({
             request.post(L.url('admin/services/adguardhome/delete_backup'), { dir: dir }).then(function(res) {
                 return res.json();
             }).then(function(d) {
-                /* 删除是短操作，请求返回即复位（无日志轮询跟踪） / delete is short; reset as soon as the request returns */
-                self._releaseBusy();
                 /* 后端现在会如实回报（此前 ok 恒为 true，删除失败也显示成功）。
                    The backend now reports honestly (ok used to be always true, so a failed delete
                    still showed as a success). */
@@ -454,7 +414,6 @@ return view.extend({
                     ui.addNotification(null, (d && d.error) || T('删除失败'), 'error');
                 }
             }).catch(function() {
-                self._releaseBusy();
                 ui.addNotification(null, T('网络错误'), 'error');
             });
         });
@@ -462,7 +421,7 @@ return view.extend({
             E('p', {}, T('确定删除此备份吗？此操作不可撤销。')),
             E('p', { style: 'font-family:monospace;word-break:break-all;font-size:12px' }, dir),
             E('div', { style: 'text-align:right; margin-top:15px;' }, [
-                E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); self._releaseBusy(); } }, T('取消')),
+                E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
                 btn
             ])
         ]);
@@ -551,60 +510,6 @@ return view.extend({
         });
     },
 
-    /* 破坏性操作统一守卫：有请求在飞、或升级/恢复日志轮询正在跑时，拒绝新的提交。
-     * 后端 runner 用的是固定路径（/tmp/agh_core_upgrade_runner.sh 等），重复提交会
-     * 覆盖正在执行的脚本并拉起第二个进程，把核心或面板文件写成半新半旧。
-     * Guard for destructive actions: reject a new submission while a request is in flight or
-     * while the upgrade/restore log poll is running. The backend runners live at fixed paths,
-     * so a repeat submission overwrites the script currently executing and spawns a second
-     * process, leaving the core or the panel files half-updated. */
-    _armBusy: function() {
-        this._actionBusy = true;
-        this._actionBusyAt = Date.now();
-        /* 新的破坏性操作覆盖旧的恢复兜底定时器，避免它去解锁另一个操作 /
-           A new destructive action supersedes the restore fallback timer, so it cannot
-           release the guard of a different, still-running operation. */
-        if (this._restoreWatchdog) {
-            clearTimeout(this._restoreWatchdog);
-            this._restoreWatchdog = null;
-        }
-    },
-
-    _releaseBusy: function() {
-        this._actionBusy = false;
-        this._actionBusyAt = 0;
-        if (this._restoreWatchdog) {
-            clearTimeout(this._restoreWatchdog);
-            this._restoreWatchdog = null;
-        }
-    },
-
-    _actionLocked: function() {
-        // Only block while a destructive action is genuinely in progress. Passive log polling
-        // (e.g. a version check) must NOT arm the guard, otherwise the natural "check -> upgrade"
-        // flow gets its confirmation silently swallowed during the poll window.
-        // 仅当破坏性操作真正进行中才拦截。被动日志轮询（如检查更新）不得武装守卫，否则
-        // 「检查→升级」的自然流程会在轮询窗口内被静默吞掉确认（v2.6.4 回归）。
-        if (!this._actionBusy) return false;
-        /* 看门狗：置位超过 2 分钟仍未复位，说明复位路径已断（日志被并发的「检查更新」
-           log_start 截断导致完成标记丢失、轮询 fetchLog 一直失败等）。此时自动解锁并提示，
-           否则「恢复 / 删除 / 升级」会被永久静默吞掉，用户完全得不到反馈。
-           Watchdog: still armed after 2 minutes means the reset path is broken (the completion
-           marker was lost because a concurrent "check update" log_start truncated the log, the
-           fetchLog poll keeps failing, ...). Unlock automatically and notify — otherwise
-           "restore / delete / upgrade" stay silently swallowed with zero feedback. */
-        if (this._actionBusyAt && (Date.now() - this._actionBusyAt > 120000)) {
-            this._releaseBusy();
-            ui.addNotification(null, T('操作超时，已自动解除锁定，请重试'), 'error');
-            return false;
-        }
-        /* 被拦截时不再静默 return：明确告知用户（此前静默吞掉，是这类问题排查困难的根因）。
-           No longer a silent return when blocked: tell the user explicitly (the silent swallow
-           was the root cause of how hard these issues were to diagnose). */
-        ui.addNotification(null, T('操作进行中，请稍候；若长时间无响应请刷新页面'), 'info');
-        return true;
-    },
-
     fetchLog: function() {
         return request.get(L.url('admin/services/adguardhome/log')).then(function(res) {
             return res.json();
@@ -623,188 +528,14 @@ return view.extend({
         ]);
     },
 
-    /* Swap in the fresh view IN PLACE (no full page reload), so the result no longer depends on
-     * the browser writing a warmed entry back into its HTTP disk cache — which is exactly what
-     * fails on Safari / router uhttpd, and is why only DevTools "Disable cache" worked before.
-     * 原地「热替换」为最新视图（不整页重载），从而不再依赖浏览器把预热条目写回 HTTP 磁盘缓存——
-     * 那正是 Safari / 路由器 uhttpd 下失效、只有开发者工具「禁用缓存」才有效的根因。
-     * Steps / 步骤：
-     * ① fetch the latest dashboard.js as TEXT with cache:'no-store' + a forced-200 header, so the
-     *    browser MUST pull the real file from the server, never a cached copy of any URL variant
-     *    用 cache:'no-store' + 强制 200 头把最新 dashboard.js 作为文本拉取，浏览器必然从服务端取真文件，
-     *    而非任何 URL 变体的缓存副本
-     * ② re-evaluate that text inside this module's own closure scope (view/ui/request/L/T/E/dom are
-     *    all provided by LuCI to the view and are in scope here) to obtain the new view class,
-     *    instantiate it, render it with the latest data we already hold, and replace the root node
-     *    在本模块自身闭包作用域内重新求值该文本（view/ui/request/L/T/E/dom 都由 LuCI 提供给视图、此处可用）
-     *    得到新视图类，实例化后用已持有的最新数据渲染，并替换当前根节点
-     * ③ if any step fails, show the manual cache-disable guide (see showCacheGuide).
-     *    任一步失败则弹出「手动禁用浏览器缓存」引导框（见 showCacheGuide）。
-     *
-     * ⚠ 网页无法自行关闭浏览器的 HTTP 磁盘缓存（已核实）：
-     *   - JS 没有关闭浏览器缓存的 API；DevTools 的 "Disable cache" 仅在 DevTools 打开时生效，
-     *     是开发者工具功能而非网页 API。
-     *   - Service Worker 是唯一的编程式缓存控制手段，但按 W3C Secure Contexts 规范，
-     *     `http://192.168.x.x/` 这类**非** potentially-trustworthy origin **不允许注册 Service Worker**
-     *     （只有 https:// 与 localhost 才是 secure context），路由器场景用不了。
-     *   - LuCI 自己是用 `Request.get(url, { cache: true })` 加载 view JS 的（luci.js:2541），
-     *     而 `cache:true` 的语义是「不追加时间戳」（luci.js:740），即直接沿用浏览器 HTTP 缓存。
-     *     这个加载发生在页面导航路径上，页面代码无法介入。
-     *   ⇒ 唯一出路是用户手动禁用缓存后刷新。故失败时必须明确引导，而不是静默失败。
-     * A web page cannot disable the browser's HTTP disk cache by itself. Verified:
-     *   - No JS API exists for it; DevTools "Disable cache" only works while DevTools is open.
-     *   - Service Workers (the one programmable caching control) require a secure context;
-     *     `http://192.168.x.x/` is not potentially trustworthy, so registration is refused.
-     *   - LuCI loads view JS with Request.get(url, { cache: true }) (luci.js:2541), whose
-     *     semantics are "do not append a timestamp" (luci.js:740) — i.e. reuse the HTTP cache as-is,
-     *     on the page-navigation path we cannot intercept.
-     *   => The only way out is a manual cache disable + refresh, so failure must guide the user. */
-    hardReload: function() {
-        var self = this;
-        /* stop the old instance's polls so they do not keep firing against a detached node
-         * 停掉旧实例的轮询，避免它们继续打已经脱离文档的节点 */
-        try {
-            if (self.pollInterval) { clearInterval(self.pollInterval); self.pollInterval = null; }
-            if (self.logPollInterval) { clearInterval(self.logPollInterval); self.logPollInterval = null; }
-            if (self.autoRefreshLogInterval) { clearInterval(self.autoRefreshLogInterval); self.autoRefreshLogInterval = null; }
-        } catch (e) {}
-
-        /* these names are all in this module's closure scope (LuCI provides them to the view)
-         * 以下名字都在本模块闭包作用域内（LuCI 提供给视图） */
-        var scope = {
-            view: view,
-            ui: ui,
-            request: request,
-            L: L,
-            T: T,
-            dom: (typeof dom !== 'undefined') ? dom : null,
-            E: (typeof E !== 'undefined') ? E : null
-        };
-
-        var _rv = (typeof L !== 'undefined' && L.env && L.env.resource_version) ? L.env.resource_version : '';
-        var _urls = [_rv ? (VIEW_JS_URL + '?v=' + _rv) : VIEW_JS_URL, VIEW_JS_URL];
-        var _hdrs = {
-            'If-None-Match': '"agh-force-refresh-' + Date.now() + '"',
-            'If-Modified-Since': 'Thu, 01 Jan 1970 00:00:00 GMT'
-        };
-
-        /* Only show the manual cache guide when the browser really is running a DIFFERENT version than
-         * the one actually installed on the router. If the two already agree, the view is not stale,
-         * so a failed refresh means something else (a transient network error, a router hiccup) and
-         * telling the user to go disable their browser cache would be misleading noise.
-         * 仅当「浏览器正在执行的版本」与「路由器上真实安装的版本」确实不一致时才提示。
-         * 两者一致 ⇒ 视图并不旧，刷新失败多半是网络抖动或路由器瞬时故障，
-         * 此时让用户去禁用浏览器缓存属于误导性噪音。
-         * 判断依据：DASHBOARD_VIEW_VERSION = 本 JS 文件自身的版本（浏览器实际加载的），
-         * statusData.dashboard_version = 服务端 manifest（真实安装的）。
-         * The test compares DASHBOARD_VIEW_VERSION (this very JS file = what the browser loaded)
-         * with statusData.dashboard_version (server manifest = what is actually installed). */
-        function _isStaleView() {
-            var _installed = (self.statusData && self.statusData.dashboard_version) ? String(self.statusData.dashboard_version) : '';
-            return !!(_installed && _installed !== String(DASHBOARD_VIEW_VERSION));
-        }
-
-        /* `_fail(why)` — `why` selects the remedy:
-         *   'cache'  : the evidence points at the browser cache (we were handed back bytes identical
-         *              to the ones we are already running). The manual guide is exactly right.
-         *   'stale'  : no fresh bytes could be fetched at all while a version mismatch is known —
-         *              the guide may help.
-         *   anything else (or omitted): versions already agree and nothing indicates cache trouble →
-         *              just reload; telling the user to disable their cache would be noise.
-         * `_fail(why)` —— `why` 决定处置方式：
-         *   'cache'：证据指向浏览器缓存（拿回的正是我们已经在跑的那份字节）→ 弹手动引导，最对症。
-         *   'stale'：已知版本不一致、且完全抓不到新字节 → 引导可能有帮助。
-         *   其他/省略：版本本来就一致、也没有缓存嫌疑 → 老老实实重载，弹引导纯属噪音。 */
-        function _fail(why) {
-            if (why === 'cache' || _isStaleView()) {
-                try { self.showCacheGuide(); return; } catch (e) { /* fall through to reload */ }
-            }
-            try { location.reload(); } catch (e2) {}
-        }
-
-        function _try(i) {
-            if (i >= _urls.length) { _fail(); return; }
-            try {
-                fetch(_urls[i], { cache: 'no-store', credentials: 'same-origin', headers: _hdrs })
-                    .then(function(r) { return r.text(); })
-                    .then(function(txt) {
-                        if (!txt || txt.length < 1000) { _try(i + 1); return; }
-                        _swap(txt);
-                    })
-                    .catch(function() { _try(i + 1); });
-            } catch (e) { _try(i + 1); }
-        }
-
-        function _swap(txt) {
-            try {
-                /* Check the fetched text against the version we are CURRENTLY running. Comparing
-                 * against the server manifest would misfire: after an upgrade the manifest already
-                 * says 2.6.12 while the file on disk may still legitimately be the older build, and
-                 * "fetched == what I run" is exactly the condition that makes the hot-swap pointless
-                 * (swapping in my own bytes changes nothing) — that is a deployment/disk mismatch, not
-                 * a browser-cache problem, so the cache guide would be misleading.
-                 * The cache problem we DO want to report is: the served bytes are the same stale
-                 * version we are already running, despite no-store + forced 200 → the browser handed
-                 * back its cached copy.
-                 * 把取回的文本与「当前正在执行的版本」比较，而不是与服务端 manifest 比较。
-                 * 升级后 manifest 已是 2.6.12、磁盘文件却可能仍是旧构建，用 manifest 比较会误判；
-                 * 而「取回的 == 我正在跑的」恰恰说明热替换毫无意义（换上去还是自己那一份），
-                 * 那是**部署/磁盘不一致**，不是浏览器缓存问题——此时弹缓存引导是误导。
-                 * 真正要报告的缓存问题是：明明 no-store + 强制 200，却仍拿回与自己相同的旧版本
-                 * ⇒ 浏览器给的是缓存副本。*/
-                var _m = txt.match(/DASHBOARD_VIEW_VERSION\s*=\s*"([^"]*)"/);
-                var _got = _m ? String(_m[1]) : '';
-                var _mine = String(DASHBOARD_VIEW_VERSION);
-                if (_got && _got === _mine) {
-                    /* the server (or the cache) handed back exactly what we are already running
-                     * 服务端（或缓存）给回的正是我们正在跑的那一份 */
-                    _fail('cache'); return;
-                }
-
-                /* re-evaluate the fresh module text with our captured scope
-                 * 用捕获的作用域重新求值最新模块文本 */
-                var newClass = new Function('view', 'ui', 'request', 'dom', 'E', 'L', 'T', txt)(
-                    scope.view, scope.ui, scope.request, scope.dom, scope.E, scope.L, scope.T
-                );
-                if (!newClass) { _fail('stale'); return; }
-                var inst = new newClass();
-                var data = self._lastData || [{}, {}];
-                var newNode = inst.render(data);
-                if (!newNode || !newNode.nodeType) { _fail('stale'); return; }
-                if (self.rootNode && self.rootNode.parentNode) {
-                    self.rootNode.parentNode.replaceChild(newNode, self.rootNode);
-                } else {
-                    var _mc = document.getElementById('maincontent') || document.body;
-                    _mc.innerHTML = '';
-                    _mc.appendChild(newNode);
-                }
-                self.rootNode = newNode;
-                try { if (scope.ui && scope.ui.addNotification) scope.ui.addNotification(null, T('已切换到最新面板视图'), 'info'); } catch (e) {}
-            } catch (e) {
-                /* hot-swap failed (unexpected re-eval error) — treat as a stale-view case
-                 * 热替换失败（非常规求值错误）→ 按「视图仍旧」处理 */
-                _fail('stale');
-            }
-        }
-
-        _try(0);
-    },
-
-    /* Manual cache-disable guide. Shown when the automatic hot-swap could not confirm a fresh
-     * view. A web page cannot turn off the browser's HTTP disk cache itself (see the hardReload
-     * comment for the verified reasons), so the user has to do it by hand — this dialog makes that
-     * step explicit instead of leaving a button that appears to do nothing.
-     * 手动禁用浏览器缓存引导。当自动热替换无法确认拿到新视图时弹出。
-     * 网页无法自行关闭浏览器的 HTTP 磁盘缓存（原因见 hardReload 注释中的核实结论），
-     * 必须由用户手动操作——这个对话框把该步骤写清楚，而不是留下一个点了没反应的按钮。 */
     showCacheGuide: function() {
         var self = this;
-        /* Build nodes with document.createElement, NOT LuCI's E(): this method runs from inside
-         * hardReload's failure path, i.e. precisely when the hot-swap failed. A hot-swap failure can
-         * mean the module scope's injected helpers (E, dom, ...) are stale or unavailable — and if E
-         * throws here, the guide never appears and the user is back to a silent no-op button.
-         * Deliberately plain DOM here, so the guide survives the very failure it is meant to explain.
-         * 用原生 document.createElement 构造节点，**不用** LuCI 的 E()：本方法运行在 hardReload 的
+        /* Build nodes with document.createElement, NOT LuCI's E(): this method runs on the
+         * stale-view path, which means the module scope's injected helpers (E, dom, ...) may be
+         * stale or unavailable — and if E throws here, the guide never appears and the user is back
+         * to a silent no-op button. Deliberately plain DOM here, so the guide survives the very
+         * failure it is meant to explain.
+         * 用原生 document.createElement 构造节点，**不用** LuCI 的 E()：本方法运行在「视图仍旧」的
          * 失败路径上，而热替换失败恰恰可能意味着模块作用域注入的辅助函数（E、dom…）已失效或不可用；
          * 若 E 在此抛异常，引导框就弹不出来，用户又回到「点了没反应」的死胡同。
          * 这里刻意只用最朴素的 DOM，保证引导能在它所要解释的那个失败场景下依然显示出来。 */
@@ -871,22 +602,23 @@ return view.extend({
         var status = data[0];
         var logData = data[1];
         this.statusData = status;
-        this._lastData = data;  // 缓存最近一次数据，供 hardReload 热替换时复用 / keep latest data for hardReload hot-swap
 
-        /* Anti-stale-view self-heal: if the server's dashboard version differs from the version of
-         * the JS currently executing, the browser is almost certainly running a cached older view
-         * (LuCI caches view modules in localStorage / HTTP cache keyed by URL — that is why an old
-         * proxy candidate or stale UI can survive a reinstall + normal refresh). Clear the cached
-         * view and force ONE hard reload so the new view loads. sessionStorage-guarded to avoid loops.
-         * 防旧视图自修复：服务端版本与正在执行的 JS 版本不一致 → 浏览器在跑缓存的旧视图（这正是升级后
-         * 旧候选残留、普通刷新清不掉的根因）。清掉缓存视图并硬重载一次；用 sessionStorage 防重载死循环。 */
+        /* Stale-view detection: the version reported by the server differs from the version of the
+         * JS currently executing, i.e. the browser is running a cached older view. A page cannot
+         * turn off the browser's HTTP cache itself (verified — see showCacheGuide), so no automatic
+         * hot-swap is attempted any more: it failed in three real-world rounds (v2.6.5/2.6.7/2.6.11)
+         * and has been removed. Guide the user straight to the manual cache-disable steps instead.
+         * sessionStorage-guarded so the guide is not re-shown on every render.
+         * 旧视图检测：服务端版本与正在执行的 JS 版本不一致 ⇒ 浏览器在跑缓存的旧视图。
+         * 网页无法自行关闭浏览器 HTTP 缓存（已核实，见 showCacheGuide），因此不再尝试自动热替换
+         * ——它经三轮实测（v2.6.5/2.6.7/2.6.11）均无效，已删除——而是直接引导用户手动禁用缓存。
+         * 用 sessionStorage 防止每次 render 都弹。 */
         if (status.dashboard_version && status.dashboard_version !== DASHBOARD_VIEW_VERSION) {
             try {
-                var _rk = '__agh_view_reload_' + status.dashboard_version;
+                var _rk = '__agh_view_guide_' + status.dashboard_version;
                 if (!sessionStorage.getItem(_rk)) {
                     sessionStorage.setItem(_rk, '1');
-                    this.hardReload();
-                    return;
+                    this.showCacheGuide();
                 }
             } catch (e) {}
         }
@@ -1108,16 +840,12 @@ return view.extend({
         var dashReloadBtn = E('button', {
             class: 'btn cbi-button',
             style: 'margin-right:10px',
-            click: function(ev) {
-                /* 立刻给出可见反馈：此前点下去界面毫无变化（旧 JS 一直被从缓存里吐出来），
-                 * 按钮置灰可以证明点击已生效、清缓存正在进行中。
-                 * Give visible feedback at once: the click previously looked like it did nothing
-                 * (the stale JS kept being served from cache); disabling the button proves the click
-                 * registered and that the cache refresh is under way. */
-                var _b = ev.currentTarget;
-                _b.disabled = true;
-                _b.textContent = T('处理中...');
-                self.hardReload();
+            click: function() {
+                /* 网页无法自行关闭浏览器的 HTTP 缓存（已核实），所以不再尝试任何自动刷新：
+                 * 直接弹出「手动禁用缓存」的操作引导。
+                 * A page cannot turn off the browser's HTTP cache itself (verified), so no
+                 * automatic refresh is attempted: open the manual cache-disable guide directly. */
+                self.showCacheGuide();
             }
         }, T('清缓存并重载'));
 
@@ -1719,13 +1447,11 @@ return view.extend({
         var title = T('确认升级面板');
         var btn = E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px' }, title);
         btn.addEventListener('click', function() {
-            if (btn.disabled || self._actionLocked()) return;
-            self._armBusy();
+            if (btn.disabled) return;
             btn.disabled = true;
             btn.textContent = T('处理中...');
             ui.hideModal();
             var release = function() {
-                self._releaseBusy();
                 btn.disabled = false;
                 btn.textContent = title;
             };
@@ -1734,9 +1460,6 @@ return view.extend({
                    Must check the success field: HTTP 200 does not mean the task started (e.g. runner write failure returns success:false). */
                 if (res && res.success) {
                     ui.addNotification(null, T('升级面板任务已启动，请在下方日志查看器中查看进度'), 'info');
-                    // Keep _actionBusy set while the upgrade runs; startLogPolling resets it once the
-                    // completion marker appears. Do not clear here, or a second upgrade could start mid-run.
-                    // 升级运行中保持 _actionBusy；startLogPolling 在检测到完成标记时复位，此处不提前清。
                     self.startDashboardPolling();
                 } else {
                     ui.addNotification(null, T('面板升级任务启动失败') + (res && res.error ? (': ' + res.error) : ''), 'error');
@@ -1947,24 +1670,20 @@ return view.extend({
                     if (done) {
                         clearInterval(self.logPollInterval);
                         self.logPollInterval = null;
-                        /* 破坏性操作完成：解除守卫，允许后续操作 / destructive action finished: release the guard */
-                        self._releaseBusy();
                         /* 升级结束：恢复用户之前开启的自动刷新 / Upgrade end: resume the auto-refresh the user had enabled */
                         self._autoRefreshPaused = false;
                     }
                 }
             }).catch(function() {
                 /* 轮询失败不能全静默：一旦 fetchLog 持续失败，完成标记永远读不到，
-                   守卫就一直置位，「恢复 / 删除」双双失效且用户零反馈。
+                   轮询就会一直空转，用户得不到任何反馈。
                    Polling failures must not be fully silent: if fetchLog keeps failing the
-                   completion marker is never seen, so the guard stays armed and both
-                   "restore" and "delete" stop working with zero feedback. */
+                   completion marker is never seen, so the poll spins forever with no feedback. */
                 self._logPollFail = (self._logPollFail || 0) + 1;
                 if (self._logPollFail >= 5) {
                     clearInterval(self.logPollInterval);
                     self.logPollInterval = null;
                     self._logPollFail = 0;
-                    self._releaseBusy();
                     self._autoRefreshPaused = false;
                     ui.addNotification(null, T('网络错误'), 'error');
                 }
@@ -1972,8 +1691,7 @@ return view.extend({
             if (pollCount >= 150) {
                 clearInterval(self.logPollInterval);
                 self.logPollInterval = null;
-                /* 轮询超时兜底：同样解除守卫，避免永久卡死 / safety: also release the guard */
-                self._releaseBusy();
+                /* 轮询超时兜底：300 秒后停止，避免定时器永久空转 / safety: stop after 300 s */
                 self._autoRefreshPaused = false;
             }
         }, 2000);
@@ -1981,11 +1699,8 @@ return view.extend({
 
     execAction: function(action) {
         var self = this;
-        if (this._actionLocked()) return;   // 防抖：快速连点忽略 / debounce: ignore rapid repeated clicks
-        this._armBusy();
         ui.showModal(E('h4', {}, T('执行中...')), [E('p', { class: 'spinning' }, action)]);
         this.sendAction(action).then(function(res) {
-            self._releaseBusy();
             ui.hideModal();
             if (res && res.success) {
                 ui.addNotification(null, T('操作执行成功'), 'info');
@@ -1999,7 +1714,6 @@ return view.extend({
             /* 按钮点击后重新加载日志三段：第一部分(状态)清除重载，第二、三部分滚动追加 / after a button click, reload the three log segments: part1 clear+reload, parts2&3 scroll-append */
             self.refreshLog();
         }).catch(function(err) {
-            self._releaseBusy();
             ui.hideModal();
             ui.addNotification(null, T('执行异常: ') + (err.message || err), 'error');
             self.refreshLog();
@@ -2038,21 +1752,17 @@ return view.extend({
         var title = T('确认安装');
         var btn = E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px' }, title);
         btn.addEventListener('click', function() {
-            if (btn.disabled || self._actionLocked()) return;
-            self._armBusy();
+            if (btn.disabled) return;
             btn.disabled = true;
             btn.textContent = T('处理中...');
             ui.hideModal();
             var release = function() {
-                self._releaseBusy();
                 btn.disabled = false;
                 btn.textContent = title;
             };
             self.sendAction('install_core').then(function(res) {
                 if (res && res.success) {
                     ui.addNotification(null, T('安装任务已启动，请在下方日志查看器中查看进度'), 'info');
-                    // Keep _actionBusy during install; startLogPolling resets it on completion.
-                    // 安装运行中保持 _actionBusy，startLogPolling 完成后复位。
                     self.startLogPolling();
                 } else {
                     ui.addNotification(null, T('安装任务启动失败') + (res && res.error ? ': ' + res.error : ''), 'error');
@@ -2081,8 +1791,7 @@ return view.extend({
             : T('将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。');
         var btn = E('button', { class: 'btn cbi-button cbi-button-apply', style: 'margin-left:10px' }, title);
         btn.addEventListener('click', function() {
-            if (btn.disabled || self._actionLocked()) return;
-            self._armBusy();
+            if (btn.disabled) return;
             btn.disabled = true;
             btn.textContent = T('处理中...');
             ui.hideModal();
@@ -2090,7 +1799,6 @@ return view.extend({
             var release = function() {
                 if (released) return;
                 released = true;
-                self._releaseBusy();
                 btn.disabled = false;
                 btn.textContent = title;
             };
@@ -2105,8 +1813,6 @@ return view.extend({
                 if (res && res.success) {
                     var msg = force ? T('强制重装任务已启动，请在下方日志查看器中查看进度') : T('升级任务已启动，请在下方日志查看器中查看进度');
                     ui.addNotification(null, msg, 'info');
-                    // Keep _actionBusy during upgrade; startLogPolling resets it on completion.
-                    // 升级运行中保持 _actionBusy，startLogPolling 完成后复位。
                     self.startLogPolling();
                 } else {
                     ui.addNotification(null, T('升级任务启动失败') + (res && res.error ? ': ' + res.error : ''), 'error');

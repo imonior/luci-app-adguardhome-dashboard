@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.13**
+**v2.7.0**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -386,6 +386,12 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.7.0**
+  - **Removed the destructive-action mutex — and removed the race that had made it necessary.** Since v2.6.4 both upgrade runners were written to a fixed path (`/tmp/agh_core_upgrade_runner.sh`, `/tmp/agh_dashboard_upgrade_runner.sh`), so a click on a *different* button (Upgrade core / Force reinstall / Install core, each with its own confirm modal and its own button-level guard) truncated the script another click was still executing and started a second process. The mutex existed only to paper over that. Both runners now write to a unique path (`_PID_TIME_SEQ.sh`, with an existence probe so a script that is still running can never be overwritten) and clean up after themselves — the race is gone at its root, so the lock, its 120 s watchdog, its 90 s fallback timer and the silent "button does nothing" failure mode they introduced go with it. Every button keeps its own `disabled` guard, which is what actually stops one button from being submitted twice
+  - **Removed the in-page view hot-swap** (fetching and re-evaluating `dashboard.js` in place). It failed in three real-world rounds (v2.6.5 / v2.6.7 / v2.6.11), and a page cannot turn off the browser's HTTP disk cache by itself. The button now opens the manual cache-disable guide directly, and the guide is triggered by a plain version mismatch at render time (`dashboard_version` vs `DASHBOARD_VIEW_VERSION`) instead of depending on the hot-swap failing. One consequence to know: a browser still stuck on an old view needs **one manual hard refresh** to load this version — the button inside the stale copy cannot repair itself
+  - **Fixed a crash found during pre-release verification (never released)**: the generated self-cleanup line `rm -f '<runner>'` referenced `scrpath` *before* its `local` declaration, so Lua would have concatenated a nil value and aborted the core upgrade. The line is now emitted after the path exists
+  - Manifest bumped to 2.7.0; `checksums.sha256` regenerated
 
 - **v2.6.13**
   - **Removed the RSA release-signature check entirely — back to the 2.6.2 way.** The signature feature (added in v2.6.9) was meant to prove release authenticity against a malicious mirror, but `openssl` on stock OpenWrt misreports a valid signature as invalid, and gating on it bricked upgrades even after `openssl-util` was installed (the released files actually verify `Verified OK` off-router — confirmed byte-identical through the proxy and on desktop OpenSSL). We reverted to the pre-signature behaviour: upgrade and install now verify **per-file sha256 integrity only**, exactly like 2.6.2. This still catches corruption and stale proxy caches, but no longer blocks a working upgrade. The pinned public key, `verify_sig` / `verify_release_sig`, the openssl-util auto-install, and `checksums.sha256.sig` generation are all gone
