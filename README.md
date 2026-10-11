@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **Standard AdGuard Home management panel for LuCI 2.0** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.10**
+**v2.6.11**
 
 A complete AdGuard Home management panel for OpenWrt / ImmortalWrt / iStoreOS.
 
@@ -389,6 +389,12 @@ Browser JS View  ──HTTP──▸  Lua Controller  ──exec──▸  Syste
 ## Changelog
 
 > Language: **English (default)** · [中文](README.zh-CN.md#变更记录--changelog) — user-facing docs are English by default; the zh-CN file is the translation companion.
+
+- **v2.6.11**
+  - **"Clear Cache & Reload" now tells you what to do instead of silently failing**: a web page cannot turn off the browser's HTTP disk cache by itself. There is no JS API for it (DevTools' "Disable cache" only works while DevTools is open), Service Workers require a secure context and `http://192.168.x.x/` is not one, and LuCI loads view modules with `Request.get(url, { cache: true })` (luci.js:2541 — `cache: true` means "do not append a timestamp", luci.js:740) on the page-navigation path we cannot intercept. So when the automatic hot-swap cannot confirm a fresh view, the button now opens a guide with the exact steps for Chrome/Edge, Firefox and Safari, plus a one-click reload that fires while your cache-disable is still active
+  - **The guide only appears when the running version really differs from the installed one**: if the version executing in your browser already matches the server manifest, a failed refresh is just a transient network problem, and telling you to disable your browser cache would be noise. The check compares `DASHBOARD_VIEW_VERSION` (this JS file, i.e. what the browser loaded) with `statusData.dashboard_version` (server manifest, i.e. what is installed). Separately, if the bytes served back are identical to the ones already running, that is direct evidence the browser handed over its cached copy, and the guide is shown even when the two versions agree
+  - **The hot-swap no longer reports success when it did not**: it now verifies the fetched text really carries the server's version (`DASHBOARD_VIEW_VERSION` vs `dashboard_version`) before swapping it in. Previously a 200 response carrying the stale body was swapped in and reported as "switched to the latest view", which is exactly the "the button does nothing" symptom this change is meant to eliminate
+  - Six new UI strings added to both locales. Manifest bumped to 2.6.11; `checksums.sha256` regenerated and re-signed
 
 - **v2.6.10**
   - **Documentation correction**: the v2.6.9 changelog explained the 403 root cause as "the RPC client sends the CSRF token via the `X-CSRF-Token` **header**". That was wrong, and has been verified against the LuCI sources (21.02 / 22.03 / 24.10 / master). This view's `'require request'` resolves to the `Request` class (`classes.request = Request`, luci.js:2218), whose `post()` sends a **JSON body containing no token at all** — not in the form body, not in any header (there is no `csrf` / `X-CSRF` string anywhere in luci.js). Combined with `test_post_security()` reading only `http.formvalue("token")` (dispatcher.lua:516-530), that is why a `post()` route could only ever return 403. The 403 fix in v2.6.9 is unaffected — only its explanation was wrong

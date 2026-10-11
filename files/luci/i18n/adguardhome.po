@@ -389,3 +389,27 @@ msgstr "Working..."
 
 msgid "代理设置保存失败"
 msgstr "Failed to save the proxy setting"
+
+msgid "已切换到最新面板视图"
+msgstr "Switched to the latest dashboard view"
+
+msgid "需要手动禁用浏览器缓存"
+msgstr "Manual browser-cache disable required"
+
+msgid "浏览器缓存了旧版视图文件，网页无法自行关闭浏览器缓存（这是浏览器安全限制），请按下面步骤手动禁用缓存后刷新："
+msgstr "The browser cached the old view file. A web page cannot turn off the browser cache itself (a browser security restriction) - please disable the cache manually as below, then reload:"
+
+msgid "禁用缓存只对这一次刷新生效；面板显示为最新版本后，重新加载一次即可恢复正常缓存。"
+msgstr "The cache disable only applies to this reload; once the dashboard shows the latest version, reload once more to restore normal caching."
+
+msgid "我已禁用缓存，刷新页面"
+msgstr "I have disabled the cache - reload"
+
+msgid "关闭"
+msgstr "Close"
+
+msgid "需要手动禁用浏览器缓存：Chrome/Edge/Firefox 请在开发者工具 Network 面板勾选 Disable cache；Safari 请用 开发 → 停用缓存。然后刷新本页。"
+msgstr "Manual browser-cache disable required: in Chrome/Edge/Firefox tick Disable cache in the DevTools Network panel; in Safari use Develop -> Disable Caches. Then reload this page."
+
+msgid "当前页面运行的版本与服务端实际安装的版本不一致，正因如此才需要这一步。"
+msgstr "The version running in this page differs from the one actually installed on the server - that is exactly why this step is needed."

@@ -7,7 +7,7 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.6.10";
+var DASHBOARD_VIEW_VERSION = "2.6.11";
 /* 本视图 JS 的部署路径（自修复时用于绕过 HTTP 缓存重新拉取自己）
  * Deployed path of this view JS (used by the self-heal to re-fetch itself past the HTTP cache). */
 var VIEW_JS_URL = "/luci-static/resources/view/adguardhome/dashboard.js";
@@ -164,6 +164,14 @@ var _EN = {
     '浏览器缓存了旧视图，界面可能仍是升级前的样子 —— 点击右侧「清缓存并重载」': 'The browser cached an old view, so the UI may still look pre-upgrade - click "Clear Cache & Reload" on the right',
     '处理中...': 'Working...',
     '代理设置保存失败': 'Failed to save the proxy setting',
+    '已切换到最新面板视图': 'Switched to the latest dashboard view',
+    '需要手动禁用浏览器缓存': 'Manual browser-cache disable required',
+    '当前页面运行的版本与服务端实际安装的版本不一致，正因如此才需要这一步。': 'The version running in this page differs from the one actually installed on the server - that is exactly why this step is needed.',
+    '浏览器缓存了旧版视图文件，网页无法自行关闭浏览器缓存（这是浏览器安全限制），请按下面步骤手动禁用缓存后刷新：': 'The browser cached the old view file. A web page cannot turn off the browser cache itself (a browser security restriction) - please disable the cache manually as below, then reload:',
+    '禁用缓存只对这一次刷新生效；面板显示为最新版本后，重新加载一次即可恢复正常缓存。': 'The cache disable only applies to this reload; once the dashboard shows the latest version, reload once more to restore normal caching.',
+    '我已禁用缓存，刷新页面': 'I have disabled the cache - reload',
+    '需要手动禁用浏览器缓存：Chrome/Edge/Firefox 请在开发者工具 Network 面板勾选 Disable cache；Safari 请用 开发 → 停用缓存。然后刷新本页。': 'Manual browser-cache disable required: in Chrome/Edge/Firefox tick Disable cache in the DevTools Network panel; in Safari use Develop -> Disable Caches. Then reload this page.',
+    '关闭': 'Close',
 };
 
 var _ZH_CACHE = null;  // _isChinese 结果缓存，页面生命周期内不用重复检测 / cache _isChinese result; no re-detect within page lifetime
@@ -630,8 +638,27 @@ return view.extend({
      *    instantiate it, render it with the latest data we already hold, and replace the root node
      *    在本模块自身闭包作用域内重新求值该文本（view/ui/request/L/T/E/dom 都由 LuCI 提供给视图、此处可用）
      *    得到新视图类，实例化后用已持有的最新数据渲染，并替换当前根节点
-     * ③ on any failure, fall back to a full reload (last resort: DevTools "Disable cache")
-     *    任一步失败则兜底整页重载（终极手段：开发者工具「禁用缓存」） */
+     * ③ if any step fails, show the manual cache-disable guide (see showCacheGuide).
+     *    任一步失败则弹出「手动禁用浏览器缓存」引导框（见 showCacheGuide）。
+     *
+     * ⚠ 网页无法自行关闭浏览器的 HTTP 磁盘缓存（已核实）：
+     *   - JS 没有关闭浏览器缓存的 API；DevTools 的 "Disable cache" 仅在 DevTools 打开时生效，
+     *     是开发者工具功能而非网页 API。
+     *   - Service Worker 是唯一的编程式缓存控制手段，但按 W3C Secure Contexts 规范，
+     *     `http://192.168.x.x/` 这类**非** potentially-trustworthy origin **不允许注册 Service Worker**
+     *     （只有 https:// 与 localhost 才是 secure context），路由器场景用不了。
+     *   - LuCI 自己是用 `Request.get(url, { cache: true })` 加载 view JS 的（luci.js:2541），
+     *     而 `cache:true` 的语义是「不追加时间戳」（luci.js:740），即直接沿用浏览器 HTTP 缓存。
+     *     这个加载发生在页面导航路径上，页面代码无法介入。
+     *   ⇒ 唯一出路是用户手动禁用缓存后刷新。故失败时必须明确引导，而不是静默失败。
+     * A web page cannot disable the browser's HTTP disk cache by itself. Verified:
+     *   - No JS API exists for it; DevTools "Disable cache" only works while DevTools is open.
+     *   - Service Workers (the one programmable caching control) require a secure context;
+     *     `http://192.168.x.x/` is not potentially trustworthy, so registration is refused.
+     *   - LuCI loads view JS with Request.get(url, { cache: true }) (luci.js:2541), whose
+     *     semantics are "do not append a timestamp" (luci.js:740) — i.e. reuse the HTTP cache as-is,
+     *     on the page-navigation path we cannot intercept.
+     *   => The only way out is a manual cache disable + refresh, so failure must guide the user. */
     hardReload: function() {
         var self = this;
         /* stop the old instance's polls so they do not keep firing against a detached node
@@ -661,7 +688,39 @@ return view.extend({
             'If-Modified-Since': 'Thu, 01 Jan 1970 00:00:00 GMT'
         };
 
-        function _fail() { try { location.reload(); } catch (e) {} }
+        /* Only show the manual cache guide when the browser really is running a DIFFERENT version than
+         * the one actually installed on the router. If the two already agree, the view is not stale,
+         * so a failed refresh means something else (a transient network error, a router hiccup) and
+         * telling the user to go disable their browser cache would be misleading noise.
+         * 仅当「浏览器正在执行的版本」与「路由器上真实安装的版本」确实不一致时才提示。
+         * 两者一致 ⇒ 视图并不旧，刷新失败多半是网络抖动或路由器瞬时故障，
+         * 此时让用户去禁用浏览器缓存属于误导性噪音。
+         * 判断依据：DASHBOARD_VIEW_VERSION = 本 JS 文件自身的版本（浏览器实际加载的），
+         * statusData.dashboard_version = 服务端 manifest（真实安装的）。
+         * The test compares DASHBOARD_VIEW_VERSION (this very JS file = what the browser loaded)
+         * with statusData.dashboard_version (server manifest = what is actually installed). */
+        function _isStaleView() {
+            var _installed = (self.statusData && self.statusData.dashboard_version) ? String(self.statusData.dashboard_version) : '';
+            return !!(_installed && _installed !== String(DASHBOARD_VIEW_VERSION));
+        }
+
+        /* `_fail(why)` — `why` selects the remedy:
+         *   'cache'  : the evidence points at the browser cache (we were handed back bytes identical
+         *              to the ones we are already running). The manual guide is exactly right.
+         *   'stale'  : no fresh bytes could be fetched at all while a version mismatch is known —
+         *              the guide may help.
+         *   anything else (or omitted): versions already agree and nothing indicates cache trouble →
+         *              just reload; telling the user to disable their cache would be noise.
+         * `_fail(why)` —— `why` 决定处置方式：
+         *   'cache'：证据指向浏览器缓存（拿回的正是我们已经在跑的那份字节）→ 弹手动引导，最对症。
+         *   'stale'：已知版本不一致、且完全抓不到新字节 → 引导可能有帮助。
+         *   其他/省略：版本本来就一致、也没有缓存嫌疑 → 老老实实重载，弹引导纯属噪音。 */
+        function _fail(why) {
+            if (why === 'cache' || _isStaleView()) {
+                try { self.showCacheGuide(); return; } catch (e) { /* fall through to reload */ }
+            }
+            try { location.reload(); } catch (e2) {}
+        }
 
         function _try(i) {
             if (i >= _urls.length) { _fail(); return; }
@@ -678,16 +737,40 @@ return view.extend({
 
         function _swap(txt) {
             try {
+                /* Check the fetched text against the version we are CURRENTLY running. Comparing
+                 * against the server manifest would misfire: after an upgrade the manifest already
+                 * says 2.6.12 while the file on disk may still legitimately be the older build, and
+                 * "fetched == what I run" is exactly the condition that makes the hot-swap pointless
+                 * (swapping in my own bytes changes nothing) — that is a deployment/disk mismatch, not
+                 * a browser-cache problem, so the cache guide would be misleading.
+                 * The cache problem we DO want to report is: the served bytes are the same stale
+                 * version we are already running, despite no-store + forced 200 → the browser handed
+                 * back its cached copy.
+                 * 把取回的文本与「当前正在执行的版本」比较，而不是与服务端 manifest 比较。
+                 * 升级后 manifest 已是 2.6.12、磁盘文件却可能仍是旧构建，用 manifest 比较会误判；
+                 * 而「取回的 == 我正在跑的」恰恰说明热替换毫无意义（换上去还是自己那一份），
+                 * 那是**部署/磁盘不一致**，不是浏览器缓存问题——此时弹缓存引导是误导。
+                 * 真正要报告的缓存问题是：明明 no-store + 强制 200，却仍拿回与自己相同的旧版本
+                 * ⇒ 浏览器给的是缓存副本。*/
+                var _m = txt.match(/DASHBOARD_VIEW_VERSION\s*=\s*"([^"]*)"/);
+                var _got = _m ? String(_m[1]) : '';
+                var _mine = String(DASHBOARD_VIEW_VERSION);
+                if (_got && _got === _mine) {
+                    /* the server (or the cache) handed back exactly what we are already running
+                     * 服务端（或缓存）给回的正是我们正在跑的那一份 */
+                    _fail('cache'); return;
+                }
+
                 /* re-evaluate the fresh module text with our captured scope
                  * 用捕获的作用域重新求值最新模块文本 */
                 var newClass = new Function('view', 'ui', 'request', 'dom', 'E', 'L', 'T', txt)(
                     scope.view, scope.ui, scope.request, scope.dom, scope.E, scope.L, scope.T
                 );
-                if (!newClass) { _fail(); return; }
+                if (!newClass) { _fail('stale'); return; }
                 var inst = new newClass();
                 var data = self._lastData || [{}, {}];
                 var newNode = inst.render(data);
-                if (!newNode || !newNode.nodeType) { _fail(); return; }
+                if (!newNode || !newNode.nodeType) { _fail('stale'); return; }
                 if (self.rootNode && self.rootNode.parentNode) {
                     self.rootNode.parentNode.replaceChild(newNode, self.rootNode);
                 } else {
@@ -696,15 +779,92 @@ return view.extend({
                     _mc.appendChild(newNode);
                 }
                 self.rootNode = newNode;
-                try { if (scope.ui && scope.ui.addNotification) scope.ui.addNotification(null, '已切换到最新面板视图', 'info'); } catch (e) {}
+                try { if (scope.ui && scope.ui.addNotification) scope.ui.addNotification(null, T('已切换到最新面板视图'), 'info'); } catch (e) {}
             } catch (e) {
-                /* hot-swap failed (unexpected re-eval error) — fall back to a full page reload
-                 * 热替换失败（非常规求值错误）→ 兜底整页重载 */
-                _fail();
+                /* hot-swap failed (unexpected re-eval error) — treat as a stale-view case
+                 * 热替换失败（非常规求值错误）→ 按「视图仍旧」处理 */
+                _fail('stale');
             }
         }
 
         _try(0);
+    },
+
+    /* Manual cache-disable guide. Shown when the automatic hot-swap could not confirm a fresh
+     * view. A web page cannot turn off the browser's HTTP disk cache itself (see the hardReload
+     * comment for the verified reasons), so the user has to do it by hand — this dialog makes that
+     * step explicit instead of leaving a button that appears to do nothing.
+     * 手动禁用浏览器缓存引导。当自动热替换无法确认拿到新视图时弹出。
+     * 网页无法自行关闭浏览器的 HTTP 磁盘缓存（原因见 hardReload 注释中的核实结论），
+     * 必须由用户手动操作——这个对话框把该步骤写清楚，而不是留下一个点了没反应的按钮。 */
+    showCacheGuide: function() {
+        var self = this;
+        /* Build nodes with document.createElement, NOT LuCI's E(): this method runs from inside
+         * hardReload's failure path, i.e. precisely when the hot-swap failed. A hot-swap failure can
+         * mean the module scope's injected helpers (E, dom, ...) are stale or unavailable — and if E
+         * throws here, the guide never appears and the user is back to a silent no-op button.
+         * Deliberately plain DOM here, so the guide survives the very failure it is meant to explain.
+         * 用原生 document.createElement 构造节点，**不用** LuCI 的 E()：本方法运行在 hardReload 的
+         * 失败路径上，而热替换失败恰恰可能意味着模块作用域注入的辅助函数（E、dom…）已失效或不可用；
+         * 若 E 在此抛异常，引导框就弹不出来，用户又回到「点了没反应」的死胡同。
+         * 这里刻意只用最朴素的 DOM，保证引导能在它所要解释的那个失败场景下依然显示出来。 */
+        function mk(tag, style, text) {
+            var n = document.createElement(tag);
+            if (style) n.setAttribute('style', style);
+            if (text != null) n.textContent = text;
+            return n;
+        }
+
+        function p(style, text) { return mk('p', style, text); }
+
+        var body = [
+            p('margin:0 0 10px', T('浏览器缓存了旧版视图文件，网页无法自行关闭浏览器缓存（这是浏览器安全限制），请按下面步骤手动禁用缓存后刷新：')),
+            p('margin:0 0 10px;color:#8a8a8a;font-size:12px', T('当前页面运行的版本与服务端实际安装的版本不一致，正因如此才需要这一步。')),
+            p('margin:0 0 6px;font-weight:bold', 'Chrome / Edge：'),
+            p('margin:0 0 10px;padding-left:12px', '1) 按 F12 打开开发者工具 → 切到 Network（网络）面板 → 勾选 Disable cache（禁用缓存）→ 保持面板打开，刷新本页。'),
+            p('margin:0 0 6px;font-weight:bold', 'Firefox：'),
+            p('margin:0 0 10px;padding-left:12px', '1) 按 F12 → Network（网络）面板 → 勾选 Disable Cache（禁用缓存）→ 刷新本页。'),
+            p('margin:0 0 6px;font-weight:bold', 'Safari：'),
+            p('margin:0 0 10px;padding-left:12px', '1) 菜单 开发 → 停用缓存（Disable Caches）→ 刷新本页。注意：Cmd+Shift+R 在 Safari 不是硬刷新。'),
+            p('margin:0;color:#8a8a8a;font-size:12px', T('禁用缓存只对这一次刷新生效；面板显示为最新版本后，重新加载一次即可恢复正常缓存。'))
+        ];
+
+        var reloadBtn = mk('button', 'margin-left:10px', T('我已禁用缓存，刷新页面'));
+        reloadBtn.className = 'btn cbi-button cbi-button-apply';
+        reloadBtn.addEventListener('click', function() {
+            /* the user has (hopefully) enabled Disable cache — reload now while it is active
+             * 用户应已启用「禁用缓存」——趁其生效立即刷新 */
+            try { if (ui && ui.hideModal) ui.hideModal(); } catch (e) {}
+            try { location.reload(); } catch (e) {}
+        });
+
+        var closeBtn = mk('button', '', T('关闭'));
+        closeBtn.className = 'btn cbi-button';
+        closeBtn.addEventListener('click', function() {
+            try { if (ui && ui.hideModal) ui.hideModal(); } catch (e) {}
+        });
+
+        var footer = mk('div', 'text-align:right;margin-top:15px');
+        footer.appendChild(closeBtn);
+        footer.appendChild(reloadBtn);
+        body.push(footer);
+
+        var title = mk('h4', '', T('需要手动禁用浏览器缓存'));
+
+        try {
+            if (ui && ui.showModal) {
+                ui.showModal(title, body);
+            } else if (ui && ui.addNotification) {
+                /* last resort: no modal available → at least surface the instructions
+                 * 最后手段：没有弹窗能力 → 至少把指引以通知形式给出，别静默失败 */
+                ui.addNotification(null,
+                    T('需要手动禁用浏览器缓存：Chrome/Edge/Firefox 请在开发者工具 Network 面板勾选 Disable cache；Safari 请用 开发 → 停用缓存。然后刷新本页。'),
+                    'error', 0);
+                try { location.reload(); } catch (e) {}
+            } else {
+                try { location.reload(); } catch (e) {}
+            }
+        } catch (e) { try { location.reload(); } catch (e2) {} }
     },
 
     render: function(data) {

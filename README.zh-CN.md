@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.6.10**
+**v2.6.11**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -381,6 +381,12 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.6.11**
+  - **「清缓存并重载」不再沉默失败，而是明确告诉你该怎么做**：网页**无法自行关闭**浏览器的 HTTP 磁盘缓存——JS 没有这个 API（DevTools 的「禁用缓存」只在DevTools 打开时生效）；Service Worker 需要 secure context，而 `http://192.168.x.x/` 不是；LuCI 用 `Request.get(url, { cache: true })` 加载视图模块（luci.js:2541，而 `cache: true` 的语义是「不追加时间戳」，luci.js:740），且发生在页面导航路径上，无法介入。因此当自动热替换无法确认拿到新视图时，按钮会弹出引导框，给出 Chrome/Edge、Firefox、Safari 各自的**具体操作步骤**，并提供「我已禁用缓存，刷新页面」一键刷新
+  - **只有「当前运行的版本」与「实际安装的版本」确实不一致时才提示**：若浏览器正在执行的版本已与服务端 manifest 一致，刷新失败多半只是网络抖动，此时让你去禁用浏览器缓存属于噪音。判断依据是 `DASHBOARD_VIEW_VERSION`（本 JS 文件，即浏览器实际加载的）与 `statusData.dashboard_version`（服务端 manifest，即真实安装的）。另外，若服务端回传的字节与正在运行的完全相同，那就是浏览器给了缓存副本的直接证据——此时即便版本一致也会给出提示
+  - **热替换不再「假成功」**：现在会在替换前校验取回的文本确实是服务端对应版本（比对 `DASHBOARD_VIEW_VERSION` 与 `dashboard_version`）。此前一个内容仍旧的 200 响应会被换上去并提示「已切换到最新面板视图」——正是本次要消除的「点了没反应」症状
+  - 中英文各新增 6 条界面文案。版本升至 2.6.11；重新生成并重新签署 `checksums.sha256`
 
 - **v2.6.10**
   - **文档纠错**：v2.6.9 的变更记录把403 根因写成「RPC 客户端把 CSRF token 走 `X-CSRF-Token` **请求头**发送」——**这是错的**。现已在 LuCI 各版本源码（21.02 / 22.03 / 24.10 / master）上核实：本视图的 `'require request'` 解析到的是 `Request` 类（`classes.request = Request`，luci.js:2218），其 `post()` 发出的是**完全不含 token 的 JSON body**——表单体没有、任何请求头也没有（整个 luci.js 里不存在 `csrf` / `X-CSRF` 字样）。而 `test_post_security()` 只读 `http.formvalue("token")`（dispatcher.lua:516-530），两者相加就注定了 `post()` 路由必然 403。**v2.6.9 的修复本身不受影响，只是它的解释写错了**
