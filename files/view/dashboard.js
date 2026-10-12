@@ -7,7 +7,7 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.7.0";
+var DASHBOARD_VIEW_VERSION = "2.7.1";
 /* 本视图 JS 的部署路径（自修复时用于绕过 HTTP 缓存重新拉取自己）
  * Deployed path of this view JS (used by the self-heal to re-fetch itself past the HTTP cache). */
 
@@ -834,7 +834,7 @@ return view.extend({
         this.dashLoadedVerEl = dashLoadedCode;
 
         /* 常驻而非仅在不一致时出现：浏览器跑的是旧 JS 时，新代码根本没机会执行，
-         * 也就显示不出红色提示——真正卡住的人恰恰看不到它。任何时候点都是一次安全的硬刷新。
+         * 也就显示不出红色提示——真正卡住的人恰恰看不到它。任何时候点都会打开手动禁用缓存的引导。
          * Always visible: when the browser runs a stale JS, new code never executes, so a
          * conditional warning would be invisible to exactly the people who need it. */
         var dashReloadBtn = E('button', {
