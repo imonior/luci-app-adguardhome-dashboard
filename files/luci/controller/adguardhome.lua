@@ -28,6 +28,11 @@ local CONFIG_PATHS = {
 -- 统一运行时日志路径（挂载于 /tmp tmpfs 内存文件系统） / Unified runtime log path (mounted on /tmp tmpfs in-memory fs)
 local EXEC_LOG = "/tmp/agh_exec.log"
 local PROXY_CONF = "/etc/adguardhome-dashboard.proxy"
+-- 用户在面板中删除（隐藏）的预置镜像清单，一行一条完整规格（如 mirror|https://ghfast.top/）。
+-- 文件只写白名单内的字面量（见 PROXY_BUILTIN_MIRRORS），不存在注入面。
+-- Mirrors the user removed in the panel, one full spec per line (e.g. mirror|https://ghfast.top/).
+-- Only whitelisted literals (see PROXY_BUILTIN_MIRRORS) are ever written — no injection surface.
+local PROXY_HIDDEN = "/etc/adguardhome-dashboard.proxy_hidden"
 local DASHBOARD_VERSION = "2.5.0"   -- 兜底默认值：仅当本地 manifest.json 缺失（老版本升级前）时使用
 local DASH_REPO = "imonior/luci-app-adguardhome-dashboard"
 local DASH_BRANCH = "main"
@@ -82,8 +87,18 @@ local function get_installed_version()
 end
 
 -- 面板文件清单 / Dashboard file manifest
+-- ⚠ v2.8.0 起视图 JS 部署为版本化文件名（部署时按 manifest 版本重命名，dst 在此仅作占位），
+--   menu.d 的 path 同步改写 —— 每个版本的视图 URL 唯一，浏览器不可能命中旧缓存（根治
+--   「升级/降级后必须手动禁用缓存」）。文件名禁用点号：luci.js require() 会把名字里的
+--   "." 全部替换成 "/"。菜单项本身（menu.d）加入清单，保证备份/恢复时 JS 与 menu.d 成对。
+-- Since v2.8.0 the view JS is deployed under a version-named file (renamed from the manifest
+-- version at deploy time; dst here is a placeholder) and menu.d's path is rewritten to match —
+-- one unique view URL per version, so the browser can never hit a stale cached copy (root fix
+-- for "must disable cache after upgrade/downgrade"). No dots in the filename: luci.js require()
+-- replaces every "." with "/". menu.d joined the manifest so backups pair JS with menu.d.
 local DASH_FILES = {
     { src = "files/view/dashboard.js",                  dst = "/www/luci-static/resources/view/adguardhome/dashboard.js", base = "dashboard.js", kind = "js",  min_size = 10000 },
+    { src = "files/luci/menu.d/luci-app-adguardhome-dashboard.json", dst = "/usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json", base = "luci-app-adguardhome-dashboard.json", kind = "menu", min_size = 50 },
     { src = "files/luci/i18n/adguardhome.po",           dst = "/usr/lib/lua/luci/i18n/adguardhome.po",           base = "adguardhome.po",        kind = "po",  min_size = 500 },
     { src = "files/luci/i18n/adguardhome.zh-cn.po",     dst = "/usr/lib/lua/luci/i18n/adguardhome.zh-cn.po",     base = "adguardhome.zh-cn.po",  kind = "po",  min_size = 500 },
     { src = "files/luci/i18n/adguardhome.lmo",           dst = "/usr/lib/lua/luci/i18n/adguardhome.lmo",           base = "adguardhome.lmo",       kind = "lmo", min_size = 100 },
@@ -132,6 +147,34 @@ local function is_safe_spec(spec)
         return false
     end
     return addr:match("^https?://[%w%.%-/_:]+$") ~= nil
+end
+
+-- 预置镜像白名单（与 install.sh PROXY_LIST、dashboard.js proxyBuiltins 三处同步）。
+-- 删除操作只接受这份白名单里的字面量，因此写入 hidden 文件的内容是常量，无注入面。
+-- Built-in mirror whitelist (kept in sync with install.sh PROXY_LIST and dashboard.js
+-- proxyBuiltins). The delete action only accepts these literals, so the hidden file only
+-- ever receives constants — no injection surface.
+local PROXY_BUILTIN_MIRRORS = {
+    "mirror|https://ghfast.top/",
+    "mirror|https://gh-proxy.com/"
+}
+
+-- 读取被删除的预置镜像集合（返回 array；只保留白名单内的行，忽略空行与外来内容）。
+-- Read the removed-mirror list (array; only whitelist lines are kept, blank/foreign lines ignored).
+local function get_hidden_builtins()
+    local out = {}
+    if not fs.access(PROXY_HIDDEN) then return out end
+    local content = fs.readfile(PROXY_HIDDEN) or ""
+    for raw in content:gmatch("([^\n]+)") do
+        local line = raw:gsub("%s+$", ""):gsub("^%s+", "")
+        for _, b in ipairs(PROXY_BUILTIN_MIRRORS) do
+            if line == b then
+                out[#out + 1] = line
+                break
+            end
+        end
+    end
+    return out
 end
 
 local function get_persisted_proxy()
@@ -309,6 +352,8 @@ function index()
     entry({"admin", "services", "adguardhome", "status"}, call("get_status"), nil, nil)
     entry({"admin", "services", "adguardhome", "action"}, call("do_action"), nil, nil)
     entry({"admin", "services", "adguardhome", "set_proxy"}, call("set_proxy"), nil, nil)
+    entry({"admin", "services", "adguardhome", "del_proxy_builtin"}, call("del_proxy_builtin"), nil, nil)
+    entry({"admin", "services", "adguardhome", "restore_proxy_builtins"}, call("restore_proxy_builtins"), nil, nil)
     entry({"admin", "services", "adguardhome", "proxy_test"}, call("proxy_test"), nil, nil)
     entry({"admin", "services", "adguardhome", "geo_probe"}, call("geo_probe"), nil, nil)
     entry({"admin", "services", "adguardhome", "check_update"}, call("check_update"), nil, nil)
@@ -337,6 +382,8 @@ function get_status()
     }
 
     status.proxy = get_persisted_proxy()
+    -- 被用户删除的预置镜像清单，前端据此过滤内置镜像行 / Built-in mirrors removed by the user; the frontend filters its rows with this
+    status.proxy_hidden = get_hidden_builtins()
 
     local bin_path = find_binary()
     local init_script = find_init_script()
@@ -1000,6 +1047,57 @@ function set_proxy()
     http.write_json({ success = true, proxy = PRIMARY_PROXY })
 end
 
+-- 删除（隐藏）一个预置镜像。value 必须与白名单字面量完全一致才落盘 —— 因此写入 hidden
+-- 文件的内容永远是常量字符串，不存在通过该端点注入内容的可能。已持久化的代理规格若是
+-- 被删除的那个，不受影响（仅从列表与候选中隐藏，等用户另选后自然失效）。
+-- Remove (hide) a built-in mirror. The value must match a whitelist literal exactly before
+-- anything is written, so the hidden file only ever receives constant strings — the endpoint
+-- cannot be used to inject content. A persisted spec equal to the removed mirror keeps working;
+-- it is merely hidden from the list/candidates until the user picks something else.
+function del_proxy_builtin()
+    local value = post_value("value") or ""
+    local known = false
+    for _, b in ipairs(PROXY_BUILTIN_MIRRORS) do
+        if value == b then known = true break end
+    end
+    if not known then
+        http.prepare_content("application/json")
+        http.write_json({ success = false, error = "not a built-in mirror" })
+        return
+    end
+    -- 已在清单中则幂等返回成功 / idempotent: already hidden -> report success
+    for _, h in ipairs(get_hidden_builtins()) do
+        if h == value then
+            http.prepare_content("application/json")
+            http.write_json({ success = true, hidden = get_hidden_builtins() })
+            return
+        end
+    end
+    local f = io.open(PROXY_HIDDEN, "a")
+    if not f then
+        http.prepare_content("application/json")
+        http.write_json({ success = false, error = "write failed" })
+        return
+    end
+    f:write(value .. "\n")
+    f:close()
+    os.execute("chmod 644 " .. PROXY_HIDDEN .. " 2>/dev/null")
+    log_line("  [proxy] built-in mirror removed: " .. value)
+    http.prepare_content("application/json")
+    http.write_json({ success = true, hidden = get_hidden_builtins() })
+end
+
+-- 恢复全部预置镜像（删除 hidden 清单文件）。
+-- Restore every built-in mirror (deletes the hidden list file).
+function restore_proxy_builtins()
+    if fs.access(PROXY_HIDDEN) then
+        os.remove(PROXY_HIDDEN)
+        log_line("  [proxy] built-in mirrors restored")
+    end
+    http.prepare_content("application/json")
+    http.write_json({ success = true, hidden = {} })
+end
+
 function proxy_test()
     load_proxies()
     local proxy = post_value("proxy")
@@ -1423,6 +1521,10 @@ dl_disp() {
     add("    json)")
     add("      grep -q '\"version\"' \"$v_path\" 2>/dev/null || { echo \"   [verify] json no 'version': $v_path\" >> \"$LOG\"; return 1; }")
     add("      ;;")
+    add("    menu)")
+    add("      grep -q '\"view\"' \"$v_path\" 2>/dev/null || { echo \"   [verify] menu no 'view': $v_path\" >> \"$LOG\"; return 1; }")
+    add("      grep -q 'adguardhome' \"$v_path\" 2>/dev/null || { echo \"   [verify] menu no 'adguardhome': $v_path\" >> \"$LOG\"; return 1; }")
+    add("      ;;")
     add("  esac")
     add("  return 0")
     add("}")
@@ -1526,11 +1628,41 @@ dl_disp() {
     end
 
     add("echo '>> Phase 2: backup & deploy' >> \"$LOG\"")
+    -- 从已下载的 manifest.json 读版本号 → 视图 JS 部署为版本化文件名（禁点号，见 DASH_FILES 注释）。
+    -- 读不到版本号则整体失败（宁可失败回滚，也不能落下一个与 menu.d 不配套的部署）。
+    -- Read the version from the downloaded manifest.json -> the view JS deploys under a
+    -- version-named file (no dots, see DASH_FILES). If the version cannot be read, fail the
+    -- whole task: a deployment not paired with menu.d is worse than a failed upgrade.
+    add([==[
+NEW_VER_RAW=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMPDIR/manifest.json" 2>/dev/null | head -n1)
+NEW_VER=$(printf '%s' "$NEW_VER_RAW" | sed 's/^v//; s/[^0-9A-Za-z._-]//g; s/\./_/g')
+if [ -z "$NEW_VER" ]; then echo '   [error] cannot read version from the downloaded manifest' >> "$LOG"; exit 1; fi
+NEW_DST_JS="/www/luci-static/resources/view/adguardhome/dashboard_v${NEW_VER}.js"
+echo ">> target view file: $NEW_DST_JS" >> "$LOG"
+]==])
     for i = 1, #DASH_FILES do
         local f = DASH_FILES[i]
         local tmp_path = tmpdir .. "/" .. f.base
-        add("deploy_one '" .. tmp_path .. "' '" .. f.dst .. "' || fail_task 'deploy " .. f.src .. "'")
+        if f.kind == "js" then
+            -- 视图 JS：部署为运行时计算的版本化路径 / View JS: deploy under the runtime-computed versioned path
+            add("deploy_one '" .. tmp_path .. "' \"$NEW_DST_JS\" || fail_task 'deploy " .. f.src .. "'")
+        else
+            add("deploy_one '" .. tmp_path .. "' '" .. f.dst .. "' || fail_task 'deploy " .. f.src .. "'")
+        end
     end
+
+    -- menu.d 的视图路径改写为本次部署的版本化文件名（同时兼容两种历史形态：固定名
+    -- "adguardhome/dashboard" 与旧版本化名 "adguardhome/dashboard_vX_Y_Z"），并清理旧版本 JS。
+    -- Rewrite menu.d's view path to this deployment's versioned filename (both historical
+    -- shapes accepted: the fixed name and a previous versioned name), then remove old view JS.
+    add("sed -i \"s#\\\"adguardhome/dashboard[_a-zA-Z0-9]*\\\"#\\\"adguardhome/dashboard_v${NEW_VER}\\\"#\" /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json")
+    add("grep -q \"adguardhome/dashboard_v${NEW_VER}\" /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json || fail_task 'rewrite menu.d view path'")
+    add("for _oldjs in /www/luci-static/resources/view/adguardhome/dashboard*.js; do")
+    add("  [ -f \"$_oldjs\" ] || continue")
+    add("  [ \"$_oldjs\" = \"$NEW_DST_JS\" ] && continue")
+    add("  rm -f \"$_oldjs\"")
+    add("  echo \"   removed old view file: $_oldjs\" >> \"$LOG\"")
+    add("done")
 
     -- 阶段2.5: 在备份目录生成 restore.sh（与 install.sh 的 restore 逻辑一致） / Phase 2.5: generate restore.sh in the backup dir (consistent with install.sh's restore logic)
     add("mkdir -p \"$BACKUP_DIR\"")
@@ -1564,7 +1696,15 @@ dl_disp() {
         -- dst 形如 /usr/lib/lua/luci/controller/adguardhome.lua / dst looks like /usr/lib/lua/luci/controller/adguardhome.lua
         -- rel 是 BACKUP_DIR 下相对路径（deploy_one 已按原 dst 完整路径备份） / rel is the relative path under BACKUP_DIR (deploy_one already backed up by the full original dst path)
         local rel = f.dst  -- deploy_one 备份时用 "$BACKUP_DIR$e_dst" 作目标，所以 rel = e_dst
-        table.insert(restore_lines, string.format("restore_one '%s' '%s'", rel, f.dst))
+        if f.kind == "js" then
+            -- 视图 JS 的实际 dst 在运行时才知道（版本化文件名）→ 先写占位符，
+            -- restore.sh 落盘后由运行中的 runner 用 $NEW_DST_JS 替换（见下方 sed）。
+            -- The view JS's actual dst is only known at runtime (version-named file) -> emit a
+            -- placeholder and let the running runner replace it with $NEW_DST_JS (sed below).
+            table.insert(restore_lines, "restore_one '__AGH_JS_DST__' '__AGH_JS_DST__'")
+        else
+            table.insert(restore_lines, string.format("restore_one '%s' '%s'", rel, f.dst))
+        end
     end
     table.insert(restore_lines, "")
     table.insert(restore_lines, "echo '>> 清理缓存并重启服务...'")
@@ -1581,6 +1721,11 @@ dl_disp() {
     add(restore_body)
     add("AGH_RESTORE_EOF")
     add("chmod 755 \"$BACKUP_DIR/restore.sh\" 2>/dev/null")
+    -- 把视图 JS 占位符替换成本次部署的版本化路径（restore.sh 里单引号包裹，路径无单引号字符）
+    -- Replace the view JS placeholder with this deployment's versioned path (single-quoted in
+    -- restore.sh; the path cannot contain a single quote).
+    add("sed -i \"s#__AGH_JS_DST__#$NEW_DST_JS#g\" \"$BACKUP_DIR/restore.sh\"")
+    add("grep -q \"$NEW_DST_JS\" \"$BACKUP_DIR/restore.sh\" || echo '   [warn] restore.sh JS placeholder not replaced' >> \"$LOG\"")
     add("echo \"   restore.sh generated: $BACKUP_DIR/restore.sh\" >> \"$LOG\"")
 
     add("echo '>> Phase 3: clear cache & restart services' >> \"$LOG\"")
@@ -1650,6 +1795,58 @@ function list_backups()
         -- core/ subdirectory; querying dir/core/AdGuardHome made the "includes core" column
         -- always false. Both layouts are accepted, so historical dirs stay compatible.
         local has_core = (fs.access(line .. "/AdGuardHome") or fs.access(line .. "/core/AdGuardHome")) and true or false
+        -- 备份内容的版本号：历史备份目录里没有版本标记文件，只能从内容反解——面板备份读
+        -- manifest.json（两种布局：面板按钮升级按完整 dst 路径存，install.sh 按短相对路径存），
+        -- 读不到再从 dashboard.js 解析 DASHBOARD_VIEW_VERSION；核心备份执行备份副本的
+        -- --version（与 install.sh 安装自检同一信任级别，--version 不碰配置、瞬间返回）。
+        -- 这样不引入任何新备份格式，老的既有备份也能直接显示版本。
+        -- Backup content version: historical backup dirs carry no version marker file, so the
+        -- version is recovered from the content itself — panel backups read manifest.json (two
+        -- layouts: the panel-button runner stores full dst paths, install.sh stores short
+        -- relative paths), falling back to parsing DASHBOARD_VIEW_VERSION out of dashboard.js;
+        -- core backups run --version on the backed-up copy (same trust level as install.sh's
+        -- self-check; --version touches no config and returns instantly). No new backup format
+        -- is introduced, and pre-existing backups show their version too.
+        local bver = ""
+        local manifest_paths = {
+            line .. "/usr/share/adguardhome-dashboard/manifest.json",
+            line .. "/adguardhome-dashboard/manifest.json",
+            line .. "/manifest.json"
+        }
+        for mi = 1, #manifest_paths do
+            if bver == "" and fs.access(manifest_paths[mi]) then
+                local mc = util.exec("cat '" .. manifest_paths[mi] .. "' 2>/dev/null") or ""
+                bver = mc:match('"version"%s*:%s*"([^"]+)"') or ""
+            end
+        end
+        if bver == "" then
+            -- v2.8.0 起视图 JS 按版本命名（dashboard_vX_Y_Z.js）→ 两种布局都用 glob 匹配全部
+            -- dashboard*.js，逐个尝试解析；目录里可能有多个（历史遗留），任一解析成功即用。
+            -- Since v2.8.0 the view JS is version-named (dashboard_vX_Y_Z.js) -> glob every
+            -- dashboard*.js under both layouts and try each; multiple files may exist in
+            -- historical dirs, the first successful parse wins.
+            local js_dirs = {
+                line .. "/www/luci-static/resources/view/adguardhome",
+                line .. "/view/adguardhome"
+            }
+            for ji = 1, #js_dirs do
+                if bver == "" and fs.access(js_dirs[ji]) then
+                    local gl = io.popen("ls '" .. js_dirs[ji] .. "/dashboard'*.js 2>/dev/null")
+                    if gl then
+                        for jline in gl:lines() do
+                            local jc = util.exec("cat '" .. jline .. "' 2>/dev/null") or ""
+                            bver = jc:match('DASHBOARD_VIEW_VERSION%s*=%s*"([^"]+)"') or ""
+                            if bver ~= "" then break end
+                        end
+                        gl:close()
+                    end
+                end
+            end
+        end
+        if bver == "" and fs.access(line .. "/AdGuardHome") then
+            local cv = util.exec("'" .. line .. "/AdGuardHome' --version 2>/dev/null") or ""
+            bver = cv:match("(v%d[%w.%-]*)") or ""
+        end
         -- 统计文件数和总大小 / Count files and total size
         local count_out = util.exec("find '" .. line .. "' -type f 2>/dev/null | wc -l") or "0"
         local file_count = tonumber(count_out:match("(%d+)")) or 0
@@ -1659,6 +1856,7 @@ function list_backups()
             dir = line,
             name = name,
             type = btype,
+            version = bver,
             timestamp = ts,
             file_count = file_count,
             size = size,
@@ -1694,8 +1892,61 @@ function restore_backup()
     end
     -- 后台执行恢复脚本，输出写入执行日志（EXEC_LOG），前端 startLogPolling 轮询检测 / Run the restore script in the background; output goes to EXEC_LOG; the frontend startLogPolling polls for completion
     -- 注意：必须与前端 confirmRestore 的完成判定一致（检测 '=== Restore from /root/agh_backup'） / Note: must match the frontend confirmRestore completion check (detects '=== Restore from /root/agh_backup')
+    -- v2.8.0 起视图 JS 按版本命名且 menu.d 的 path 指向它；旧格式备份（v2.8.0 之前生成）只含
+    -- 固定名 dashboard.js、没有 menu.d —— 恢复后 menu.d 仍指向版本化文件名，与新面板内容不配。
+    -- 这里用包装脚本统一兜底：备份里含固定名 JS（旧格式）或 menu.d 目标缺失时，把 path 改回
+    -- 固定名并重启 uhttpd；新格式备份（含 menu.d + 版本化 JS 成对）自动跳过。
+    -- Since v2.8.0 the view JS is version-named and menu.d points at it, while legacy backups
+    -- (generated before v2.8.0) only carry the fixed-name dashboard.js and no menu.d — after
+    -- such a restore menu.d would still name the versioned file, mismatching the restored
+    -- content. A wrapper realigns uniformly: if the backup contains a fixed-name JS (legacy
+    -- layout) or menu.d's target is missing, the path is rewritten back to the fixed name and
+    -- uhttpd restarted; new-format backups (paired menu.d + versioned JS) are skipped.
+    local wrap = "/tmp/agh_restore_wrap.sh"
+    local wf = io.open(wrap, "w")
+    if not wf then
+        -- 包装脚本写不出来时降级为直接执行（对齐是尽力而为，恢复本身不能因此失败）
+        -- If the wrapper cannot be written, degrade to running the bare script (alignment is
+        -- best-effort; the restore itself must not fail because of it).
+        log_start("=== Restore from " .. dir .. " ===")
+        os.execute("sh " .. restore_script .. " >> " .. EXEC_LOG .. " 2>&1 &")
+        http.prepare_content("application/json")
+        http.write_json({ success = true })
+        return
+    end
+    wf:write("#!/bin/sh\n")
+    wf:write("sh " .. restore_script .. "\n")
+    -- ⚠ 下面的 shell 片段不能用 Lua 长括号 [[...]]：sed 模式里的 [[:space:]] 含 "]]"，
+    --   会在长括号里提前终止字符串（luac 报 unexpected symbol）。改用普通转义字符串。
+    --   The shell snippet below must NOT use a Lua long bracket [[...]]: the sed pattern's
+    --   [[:space:]] contains "]]", which would terminate the long string early (luac:
+    --   unexpected symbol). Normal escaped strings instead.
+    wf:write("_bdir='" .. dir .. "'\n")
+    wf:write("_md='/usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json'\n")
+    wf:write("_jdir='/www/luci-static/resources/view/adguardhome'\n")
+    wf:write("_oldfix=''\n")
+    wf:write("[ -f \"$_bdir/www/luci-static/resources/view/adguardhome/dashboard.js\" ] && _oldfix='legacy'\n")
+    wf:write("[ -z \"$_oldfix\" ] && [ -f \"$_bdir/view/adguardhome/dashboard.js\" ] && _oldfix='legacy'\n")
+    wf:write("if [ -f \"$_md\" ]; then\n")
+    wf:write("  _cur=$(sed -n 's#.*\"path\"[[:space:]]*:[[:space:]]*\"\\(adguardhome/dashboard[^\"]*\\)\".*#\\1#p' \"$_md\" | head -n1)\n")
+    wf:write("  _tgt=\"$_jdir/${_cur#adguardhome/}.js\"\n")
+    wf:write("  if [ -n \"$_cur\" ] && { [ \"$_oldfix\" = 'legacy' ] || [ ! -f \"$_tgt\" ]; }; then\n")
+    wf:write("    case \"$_cur\" in\n")
+    wf:write("      adguardhome/dashboard) : ;;\n")
+    wf:write("      *)\n")
+    wf:write("        if [ -f \"$_jdir/dashboard.js\" ]; then\n")
+    wf:write("          sed -i \"s#\\\"$_cur\\\"#\\\"adguardhome/dashboard\\\"#\" \"$_md\"\n")
+    wf:write("          echo '>> realigned menu.d view path to the restored dashboard.js'\n")
+    wf:write("          rm -f /tmp/luci-indexcache.* /tmp/luci-modulecache.* 2>/dev/null\n")
+    wf:write("          /etc/init.d/uhttpd restart 2>/dev/null\n")
+    wf:write("        fi\n")
+    wf:write("        ;;\n")
+    wf:write("    esac\n")
+    wf:write("  fi\n")
+    wf:write("fi\n")
+    wf:close()
     log_start("=== Restore from " .. dir .. " ===")
-    os.execute("sh " .. restore_script .. " >> " .. EXEC_LOG .. " 2>&1 &")
+    os.execute("sh " .. wrap .. " >> " .. EXEC_LOG .. " 2>&1 &")
     http.prepare_content("application/json")
     http.write_json({ success = true })
 end

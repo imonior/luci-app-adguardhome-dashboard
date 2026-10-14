@@ -3,7 +3,7 @@
 # AdGuardHome LuCI Dashboard
 
 **LuCI 2.0 标准 AdGuard Home 管理面板** | **LuCI 2.0 AdGuard Home Dashboard**
-**v2.7.1**
+**v2.8.0**
 
 为 OpenWrt / ImmortalWrt / iStoreOS 提供完整的 AdGuard Home 管理面板。
 
@@ -378,6 +378,14 @@ chmod 755 /opt/AdGuardHome/AdGuardHome
 ## 变更记录 / Changelog
 
 > 语言切换 / Language: **中文（当前）** · [English](README.md#changelog) —— 对外文档默认英文，本节为中文对照版。
+
+- **v2.8.0**
+  - **视图 JS 改为按版本命名部署（`dashboard_v2_8_0.js`），并同步改写 `menu.d` 的视图路径——升级与降级后浏览器自动加载新版本，不再需要手动禁用缓存。** 这是整条「旧视图」战线的根治方案：此前所有版本都从同一个 URL（`.../view/adguardhome/dashboard.js`）提供，浏览器能否拿到新文件完全取决于其 HTTP 缓存状态（启发式新鲜期内不发请求 / 条件重验证被 uhttpd 回 `304`——uhttpd 不发 `Cache-Control`，无电池 RTC 的路由器时钟回跳后更甚）。已对照 LuCI 源码逐行核实（openwrt-22.03）：视图 JS 的 URL 由 `menu.d` 的 `action.path` 原样决定（dispatcher.lua:990 → view.htm → ui.js `instantiateView` → luci.js `require()`），因此每个版本一条唯一 URL，浏览器不可能命中旧缓存条目——包括从旧版本的第一次升级。文件名用下划线而非点号，因为 LuCI 的 `require()` 会把 `.` 全部替换成 `/`。面板升级 runner 与 `install.sh` 都从（下载的/包内的）`manifest.json` 读取版本号、改写 `menu.d` 并清理被取代的 `dashboard*.js`；`menu.d` 加入备份/恢复清单，恢复时 JS 与 menu 永远成对。`restore_backup` 在恢复旧格式备份（只含固定名 `dashboard.js`）后自动对齐 `menu.d`，恢复 v2.8.0 之前的备份依旧可用。面板内的缓存引导框（showCacheGuide）保留作为兜底
+  - **代理管理处的预置镜像现在可以删除。** 每个预置镜像行（ghfast.top / gh-proxy.com）带删除按钮（有确认弹窗）；删除结果持久化在服务端（`/etc/adguardhome-dashboard.proxy_hidden`，只可能写入白名单字面量——该端点无法被用来注入任何内容），安装脚本的候选列表（`PROXY_LIST`）下次运行起同步排除。「恢复默认镜像」一键找回。当前已持久化的代理规格不受其镜像被删除的影响
+  - **备份管理新增「版本」列，显示备份内容自身的版本号**。面板备份读取备份目录里的 `manifest.json`（兼容面板按钮升级的完整路径布局、install.sh 的短路径布局，以及本版本起的版本化视图文件名），读不到再从备份的 `dashboard.js` 解析 `DASHBOARD_VIEW_VERSION`；核心备份对备份副本执行 `--version`（与 install.sh 安装自检同一信任级别——`--version` 不碰配置、瞬间返回）。不引入任何新备份格式：既有的历史备份目录就地解析，版本同样能显示出来。实在取不到时显示 `—`
+  - **版本不一致的缓存引导框，改为只要版本不一致、每次页面加载都会重新弹出。** 此前用 `sessionStorage` 防重复，而它在刷新后仍然保留——用户关掉一次引导框后，同一个标签页里无论再怎么刷新都不会再弹，而浏览器仍在跑旧副本（v2.7.1 后实测反馈）。现改为每次页面加载提示一次：关掉后不处理直接刷新 → 会再次弹出；旧副本被真正替换 → 保持安静
+  - 未发布的 v2.7.2 内容已并入本版本（即上面两条）；v2.7.1 仍是上一个独立发布版本
+  - 版本升至 2.8.0；新增 i18n 词条（`版本`/Version、镜像删除相关）并重编两份 `.lmo`；重新生成 `checksums.sha256`
 
 - **v2.7.1**
   - **纯文档纠错，无功能变更**：v2.7.0 的发布说明称「仍卡在旧视图的浏览器需要手动硬刷新一次」——对本路由器而言这是**错的**，照做修不好浏览器。硬刷新（Ctrl+F5 / Cmd+Shift+R）仍会带上条件重验证头，而 uhttpd 不发 `Cache-Control`、且在没有电池 RTC 的路由器上时钟回跳后新文件 mtime 可能比缓存副本**更旧**，于是回答 `304`，浏览器继续复用旧内容。唯一可靠的做法是**在开发者工具里勾选「Disable cache / 禁用缓存」并保持勾选状态下刷新**——它完全跳过缓存查找、根本不发条件头（Safari：Develop → Disable Caches）。v2.7.0、v2.6.7、v2.6.5 三处相关措辞均已订正；面板内的缓存引导框（版本不一致时弹出）原文本就正确，未改动

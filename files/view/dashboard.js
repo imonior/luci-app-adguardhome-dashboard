@@ -7,7 +7,7 @@
  * 用于「防旧视图」自修复：若服务端版本与此不一致，说明浏览器在跑缓存的旧 JS，自动清缓存硬重载。
  * Version of THIS view JS (keep in sync with the release version / manifest.json when bumping).
  * Drives the anti-stale-view self-heal: a server version mismatch means a cached old JS is running. */
-var DASHBOARD_VIEW_VERSION = "2.7.1";
+var DASHBOARD_VIEW_VERSION = "2.8.0";
 /* 本视图 JS 的部署路径（自修复时用于绕过 HTTP 缓存重新拉取自己）
  * Deployed path of this view JS (used by the self-heal to re-fetch itself past the HTTP cache). */
 
@@ -112,6 +112,11 @@ var _EN = {
     '文件数': 'Files',
     '大小': 'Size',
     '含核心': 'Has Core',
+    '版本': 'Version',
+    '删除预置镜像': 'Delete built-in mirror',
+    '确定删除该预置镜像吗？删除后不再出现在列表与安装脚本的候选中，可随时用「恢复默认镜像」找回。': 'Delete this built-in mirror? It will disappear from this list and from the installer candidate list; you can bring it back anytime with "Restore default mirrors".',
+    '预置镜像已删除，可用「恢复默认镜像」找回': 'Built-in mirror removed; bring it back anytime with "Restore default mirrors"',
+    '恢复默认镜像': 'Restore default mirrors',
     '操作': 'Actions',
     '清空日志': 'Clear Log',
     '自动刷新': 'Auto Refresh',
@@ -292,12 +297,13 @@ return view.extend({
         }
         var table = E('table', { class: 'table cbi-section-table', style: 'width:100%;font-size:12px' }, [
             E('tr', { class: 'tr' }, [
-                E('th', { class: 'th', style: 'width:14%' }, T('类型')),
-                E('th', { class: 'th', style: 'width:20%' }, T('时间戳')),
-                E('th', { class: 'th', style: 'width:9%' }, T('文件数')),
-                E('th', { class: 'th', style: 'width:10%' }, T('大小')),
-                E('th', { class: 'th', style: 'width:9%' }, T('含核心')),
-                E('th', { class: 'th', style: 'width:38%' }, T('操作'))
+                E('th', { class: 'th', style: 'width:12%' }, T('类型')),
+                E('th', { class: 'th', style: 'width:10%' }, T('版本')),
+                E('th', { class: 'th', style: 'width:17%' }, T('时间戳')),
+                E('th', { class: 'th', style: 'width:8%' }, T('文件数')),
+                E('th', { class: 'th', style: 'width:9%' }, T('大小')),
+                E('th', { class: 'th', style: 'width:8%' }, T('含核心')),
+                E('th', { class: 'th', style: 'width:36%' }, T('操作'))
             ])
         ]);
         backups.forEach(function(b) {
@@ -305,6 +311,8 @@ return view.extend({
             var tr = E('tr', { class: 'tr' }, [
                 /* 悬停显示原始备份目录名（面板按钮与命令行升级同属「面板升级」，目录名仍可区分） / Hover shows the raw backup dir name (both the panel button and install.sh are panel upgrades; the dir name still tells them apart) */
                 E('td', { class: 'td', title: b.name }, typeMap[b.type] || b.type),
+                /* 备份内容自身携带的版本：面板备份来自 manifest.json/dashboard.js，核心备份来自二进制 --version / The version carried by the backup content itself: panel backups from manifest.json/dashboard.js, core backups from the binary's --version */
+                E('td', { class: 'td', style: 'font-family:monospace' }, b.version || '—'),
                 E('td', { class: 'td', style: 'font-family:monospace' }, b.timestamp || '—'),
                 E('td', { class: 'td' }, String(b.file_count || 0)),
                 E('td', { class: 'td' }, b.size || '?'),
@@ -420,6 +428,49 @@ return view.extend({
         ui.showModal(E('h4', {}, title), [
             E('p', {}, T('确定删除此备份吗？此操作不可撤销。')),
             E('p', { style: 'font-family:monospace;word-break:break-all;font-size:12px' }, dir),
+            E('div', { style: 'text-align:right; margin-top:15px;' }, [
+                E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
+                btn
+            ])
+        ]);
+    },
+
+    /* v2.8.0: 删除（隐藏）一个预置镜像。走确认弹窗（与 confirmDelete 一致，避免原生对话框
+     * 被浏览器插件/设置屏蔽后点击毫无反应）；成功后把该行从列表移除并显示恢复入口。
+     * v2.8.0: remove (hide) a built-in mirror. Uses a modal confirm (same as confirmDelete,
+     * so a suppressed native dialog cannot make the click look dead); on success the row is
+     * dropped from the list and the restore entry is revealed. */
+    confirmDeleteBuiltin: function(value, row) {
+        var self = this;
+        var title = T('删除预置镜像');
+        var btn = E('button', { class: 'btn cbi-button cbi-button-negative', style: 'margin-left:10px' }, T('删除'));
+        btn.addEventListener('click', function() {
+            if (btn.disabled) return;
+            btn.disabled = true;
+            btn.textContent = T('处理中...');
+            request.post(L.url('admin/services/adguardhome/del_proxy_builtin'), { value: value }).then(function(res) {
+                return res.json();
+            }).then(function(d) {
+                ui.hideModal();
+                if (d && d.success) {
+                    if (row && row.parentNode) { row.parentNode.removeChild(row); }
+                    var els = self.proxyRadioEls || [];
+                    for (var i = els.length - 1; i >= 0; i--) { if (els[i].proxy === value) { els.splice(i, 1); } }
+                    var rows = self.proxyMirrorRows || [];
+                    for (var j = rows.length - 1; j >= 0; j--) { if (rows[j] === row) { rows.splice(j, 1); } }
+                    if (self._proxyRevealRestore) { self._proxyRevealRestore(); }
+                    ui.addNotification(null, T('预置镜像已删除，可用「恢复默认镜像」找回'), 'info');
+                } else {
+                    ui.addNotification(null, (d && d.error) || T('删除失败'), 'error');
+                }
+            }).catch(function() {
+                ui.hideModal();
+                ui.addNotification(null, T('网络错误'), 'error');
+            });
+        });
+        ui.showModal(E('h4', {}, title), [
+            E('p', {}, T('确定删除该预置镜像吗？删除后不再出现在列表与安装脚本的候选中，可随时用「恢复默认镜像」找回。')),
+            E('p', { style: 'font-family:monospace;word-break:break-all;font-size:12px' }, value),
             E('div', { style: 'text-align:right; margin-top:15px;' }, [
                 E('button', { class: 'btn cbi-button', click: function() { ui.hideModal(); } }, T('取消')),
                 btn
@@ -608,19 +659,26 @@ return view.extend({
          * turn off the browser's HTTP cache itself (verified — see showCacheGuide), so no automatic
          * hot-swap is attempted any more: it failed in three real-world rounds (v2.6.5/2.6.7/2.6.11)
          * and has been removed. Guide the user straight to the manual cache-disable steps instead.
-         * sessionStorage-guarded so the guide is not re-shown on every render.
+         * Guarded once per page load so the guide does not re-pop on repeated renders of the
+         * same page (see the v2.7.2 note below).
          * 旧视图检测：服务端版本与正在执行的 JS 版本不一致 ⇒ 浏览器在跑缓存的旧视图。
          * 网页无法自行关闭浏览器 HTTP 缓存（已核实，见 showCacheGuide），因此不再尝试自动热替换
          * ——它经三轮实测（v2.6.5/2.6.7/2.6.11）均无效，已删除——而是直接引导用户手动禁用缓存。
-         * 用 sessionStorage 防止每次 render 都弹。 */
+         * 每次页面加载只提示一次，避免同一页面多次 render 重复弹框（见下方 v2.7.2 说明）。 */
+        /* v2.8.0: guard per page load, NOT per tab session. sessionStorage survived reloads, so
+         * once a user dismissed the guide, no reload in that tab ever showed it again while the
+         * stale copy kept running — reported in the field after v2.7.1. render() runs once per
+         * page load, so an instance flag is enough to avoid repeat modals within one page, and
+         * every reload pops the guide again until the stale copy is actually replaced.
+         * v2.8.0: 改为按「页面加载」提示一次，不再按标签页会话记忆。sessionStorage 在刷新后
+         * 仍然保留，用户关掉一次引导框后，同一个标签页里无论再怎么刷新都不会再弹，而旧副本
+         * 仍在运行——v2.7.1 后实测反馈的问题。render() 每次页面加载只执行一次，实例级标记即可
+         * 防止同页重复弹框；只要版本不一致，每次刷新都会重新弹出，直到旧副本真正被替换。 */
         if (status.dashboard_version && status.dashboard_version !== DASHBOARD_VIEW_VERSION) {
-            try {
-                var _rk = '__agh_view_guide_' + status.dashboard_version;
-                if (!sessionStorage.getItem(_rk)) {
-                    sessionStorage.setItem(_rk, '1');
-                    this.showCacheGuide();
-                }
-            } catch (e) {}
+            if (this._guideShownVer !== status.dashboard_version) {
+                this._guideShownVer = status.dashboard_version;
+                this.showCacheGuide();
+            }
         }
 
         var isBinInstalled = !!status.installed;
@@ -742,6 +800,21 @@ return view.extend({
                 }
                 cells.push(testBtn);
                 cells.push(latencyEl);
+                /* v2.8.0: 预置镜像可删除（隐藏）。删除会持久化到服务端
+                 * (/etc/adguardhome-dashboard.proxy_hidden)，安装脚本的候选列表同步排除；
+                 * 可随时用「恢复默认镜像」找回。直连行不可删除。
+                 * v2.8.0: built-in mirrors are deletable (hidden). The removal is persisted
+                 * server-side (/etc/adguardhome-dashboard.proxy_hidden) and the installer's
+                 * candidate list excludes it too; "Restore default mirrors" brings it back.
+                 * The Direct row cannot be removed. */
+                if (item.cnOnly) {
+                    var delBtn = E('button', {
+                        class: 'btn cbi-button cbi-button-negative',
+                        style: 'margin-left:6px; padding:2px 8px; font-size:12px',
+                        click: function() { self.confirmDeleteBuiltin(item.value, row); }
+                    }, T('删除'));
+                    cells.push(delBtn);
+                }
                 row = E('div', { style: 'display:flex; flex-wrap:wrap; align-items:center; padding:4px 0;' }, cells);
                 row._proxyValue = item.value;
                 proxyRadioEls.push({ proxy: item.value, radioEl: radioEl, testBtn: testBtn, latencyEl: latencyEl, row: row });
@@ -754,7 +827,18 @@ return view.extend({
         }
 
         var proxyRows = [];
-        for (var i = 0; i < proxyBuiltins.length; i++) { proxyRows.push(makeProxyRow(proxyBuiltins[i], null)); }
+        /* v2.8.0: 服务端返回的已删除预置镜像清单 → 构建行时直接跳过；
+         * 有被删除的镜像时显示「恢复默认镜像」按钮。
+         * v2.8.0: the server-reported list of removed built-in mirrors -> skip those rows while
+         * building; show the "Restore default mirrors" button when anything was removed. */
+        var proxyHiddenSet = {};
+        var proxyAnyHidden = false;
+        var proxyHiddenList = (status && status.proxy_hidden) || [];
+        for (var ph = 0; ph < proxyHiddenList.length; ph++) { proxyHiddenSet[proxyHiddenList[ph]] = true; }
+        for (var i = 0; i < proxyBuiltins.length; i++) {
+            if (proxyBuiltins[i].cnOnly && proxyHiddenSet[proxyBuiltins[i].value]) { proxyAnyHidden = true; continue; }
+            proxyRows.push(makeProxyRow(proxyBuiltins[i], null));
+        }
         proxyRows.push(makeProxyRow({ value: '' }, 'mirror'));
         proxyRows.push(makeProxyRow({ value: '' }, 'proxy'));
         this.proxyRadioEls = proxyRadioEls;
@@ -772,6 +856,38 @@ return view.extend({
             style: 'margin-top:8px; margin-left:8px'
         }, T('重新检测'));
         this.geoReBtn = geoReBtn;
+
+        /* v2.8.0: 恢复默认镜像——清空服务端的删除清单并整页刷新（重新拉取菜单与状态）。
+         * v2.8.0: restore the default mirrors — clears the server-side removal list and
+         * reloads the page (fresh menu + status). */
+        var proxyRestoreBtn = E('button', {
+            class: 'btn cbi-button',
+            style: 'margin-top:8px; margin-left:8px; display:none'
+        }, T('恢复默认镜像'));
+        this.proxyRestoreBtn = proxyRestoreBtn;
+        if (proxyAnyHidden) { proxyRestoreBtn.style.display = ''; }
+        proxyRestoreBtn.addEventListener('click', function() {
+            if (proxyRestoreBtn.disabled) return;
+            proxyRestoreBtn.disabled = true;
+            proxyRestoreBtn.textContent = T('处理中...');
+            request.post(L.url('admin/services/adguardhome/restore_proxy_builtins'), {}).then(function(res) {
+                return res.json();
+            }).then(function(d) {
+                if (d && d.success) {
+                    location.reload();
+                } else {
+                    proxyRestoreBtn.disabled = false;
+                    proxyRestoreBtn.textContent = T('恢复默认镜像');
+                    ui.addNotification(null, (d && d.error) || T('网络错误'), 'error');
+                }
+            }).catch(function() {
+                proxyRestoreBtn.disabled = false;
+                proxyRestoreBtn.textContent = T('恢复默认镜像');
+                ui.addNotification(null, T('网络错误'), 'error');
+            });
+        });
+        /* 供删除成功后即时显示恢复入口 / used to reveal the restore entry right after a removal */
+        this._proxyRevealRestore = function() { proxyRestoreBtn.style.display = ''; };
 
         var proxyHeader = E('div', { style: 'margin-bottom:10px; font-size:12px; color:#888' }, [
             E('div', {}, T('切换代理后将实时生效，用于核心与面板的检查/升级请求')),
@@ -794,6 +910,7 @@ return view.extend({
         }
         proxyContainer.appendChild(proxyGlobalTestBtn);
         proxyContainer.appendChild(geoReBtn);
+        proxyContainer.appendChild(proxyRestoreBtn);
 
         /* ── Panel self-upgrade UI ── */
         var dashCurrVer = status.dashboard_version || T('未知');

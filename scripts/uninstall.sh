@@ -46,6 +46,8 @@ rm -rf /usr/share/adguardhome-dashboard
 # 2. 清理配置标记 / Clean up config markers
 rm -f /etc/adguardhome-dashboard.version
 rm -f /etc/adguardhome-dashboard.proxy
+# v2.8.0: 面板删除预置镜像的持久化清单 / v2.8.0: the persisted built-in-mirror removal list
+rm -f /etc/adguardhome-dashboard.proxy_hidden
 
 # 3. 强力清除 LuCI 索引缓存 (关键步骤) / Force-clear the LuCI index cache (critical step)
 # 卸载不彻底的核心原因往往是索引缓存没删，导致后台还在试图寻找旧视图文件。

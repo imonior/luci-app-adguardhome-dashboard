@@ -309,6 +309,9 @@ msgstr "Size"
 msgid "含核心"
 msgstr "Core included"
 
+msgid "版本"
+msgstr "Version"
+
 msgid "操作"
 msgstr "Actions"
 
@@ -413,3 +416,16 @@ msgstr "Manual browser-cache disable required: in Chrome/Edge/Firefox tick Disab
 
 msgid "当前页面运行的版本与服务端实际安装的版本不一致，正因如此才需要这一步。"
 msgstr "The version running in this page differs from the one actually installed on the server - that is exactly why this step is needed."
+
+msgid "删除预置镜像"
+msgstr "Delete built-in mirror"
+
+msgid "确定删除该预置镜像吗？删除后不再出现在列表与安装脚本的候选中，可随时用「恢复默认镜像」找回。"
+msgstr "Delete this built-in mirror? It will disappear from this list and from the installer candidate list; you can bring it back anytime with "Restore default mirrors"."
+
+msgid "预置镜像已删除，可用「恢复默认镜像」找回"
+msgstr "Built-in mirror removed; bring it back anytime with "Restore default mirrors""
+
+msgid "恢复默认镜像"
+msgstr "Restore default mirrors"
+

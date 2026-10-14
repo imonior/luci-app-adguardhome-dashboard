@@ -137,6 +137,27 @@ mirror|https://ghfast.top/
 mirror|https://gh-proxy.com/
 "
 
+# v2.8.0: 用户在面板删除的预置镜像不再作为候选（/etc/adguardhome-dashboard.proxy_hidden，
+# 一行一条完整规格，由面板端点写入 —— 只可能包含内置白名单字面量）。全新安装时文件不存在。
+# v2.8.0: mirrors removed in the panel are no longer candidates (/etc/adguardhome-dashboard.
+# proxy_hidden, one full spec per line, written by the panel endpoints — it can only ever
+# contain built-in whitelist literals). The file does not exist on a fresh install.
+_hidden_file='/etc/adguardhome-dashboard.proxy_hidden'
+if [ -f "$_hidden_file" ]; then
+    _filtered_list=""
+    for _p in $PROXY_LIST; do
+        _skip="0"
+        while IFS= read -r _h; do
+            [ -z "$_h" ] && continue
+            if [ "$_h" = "$_p" ]; then _skip="1"; break; fi
+        done < "$_hidden_file"
+        if [ "$_skip" = "0" ]; then _filtered_list="$_filtered_list $_p"; fi
+    done
+    # 行首去一个空格（_filtered_list 以空格开头）—— for 循环对多余空白不敏感，仅为了整洁
+    # Trim the single leading space (for-loops tolerate extra whitespace anyway; cosmetic).
+    PROXY_LIST=$(printf '%s' "$_filtered_list" | sed 's/^ //')
+fi
+
 log() {
     ts=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "0000-00-00 00:00:00")
     echo "[$ts] $1"
@@ -1360,6 +1381,27 @@ for pair in $BACKUP_PAIRS; do
     fi
 done
 
+# v2.8.0: 视图 JS 自 v2.8.0 起按版本命名（dashboard_vX_Y_Z.js）—— 固定名 pair 之外，
+# 把现存的所有版本化视图文件也逐一备份，恢复脚本同步生成对应 restore_one 行。
+# 与 BACKUP_PAIRS 一样：仅在已有面板文件（本次为升级）时才会有内容落盘。
+# v2.8.0: the view JS is version-named since v2.8.0 (dashboard_vX_Y_Z.js) — beyond the fixed
+# pair, back up every existing versioned view file and emit a matching restore_one line into
+# restore.sh. Like BACKUP_PAIRS: content only lands when panel files already exist (an upgrade).
+_js_backup_lines=""
+if [ -n "$BACKUP_DIR" ]; then
+    for _vjs in /www/luci-static/resources/view/adguardhome/dashboard*.js; do
+        [ -f "$_vjs" ] || continue
+        case "$_vjs" in
+            */dashboard.js) continue ;;  # 固定名已由 BACKUP_PAIRS 覆盖 / fixed name is covered by BACKUP_PAIRS
+        esac
+        mkdir -p "$BACKUP_DIR/view/adguardhome"
+        cp -a "$_vjs" "$BACKUP_DIR/view/adguardhome/$(basename "$_vjs")" 2>/dev/null || cp "$_vjs" "$BACKUP_DIR/view/adguardhome/$(basename "$_vjs")"
+        log "  $(_t "backed up: $_vjs  ->  $BACKUP_DIR/view/adguardhome/$(basename "$_vjs")" "备份: $_vjs  ->  $BACKUP_DIR/view/adguardhome/$(basename "$_vjs")")"
+        _js_backup_lines="${_js_backup_lines}restore_one 'view/adguardhome/$(basename "$_vjs")' '$_vjs'
+"
+    done
+fi
+
 # Note: install does NOT back up the AdGuardHome core binary; core rollback is handled separately by AGH's official script and the core-upgrade flow
 # 注意：install 不备份 AdGuardHome 核心二进制，核心安装/升级的回滚由 AGH 官方安装脚本和核心升级流程单独管理
 
@@ -1399,7 +1441,7 @@ restore_one 'acl.d/luci-app-adguardhome-dashboard.json'                   '/usr/
 restore_one 'i18n/adguardhome.lmo'                                         '/usr/lib/lua/luci/i18n/adguardhome.lmo'
 restore_one 'i18n/adguardhome.zh-cn.lmo'                                   '/usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo'
 restore_one 'view/adguardhome/dashboard.js'                                '/www/luci-static/resources/view/adguardhome/dashboard.js'
-restore_one 'adguardhome-dashboard/manifest.json'                      '/usr/share/adguardhome-dashboard/manifest.json'
+${_js_backup_lines}restore_one 'adguardhome-dashboard/manifest.json'                      '/usr/share/adguardhome-dashboard/manifest.json'
 
 echo ">> Clearing cache and restarting services..."
 rm -rf /tmp/luci-* 2>/dev/null
@@ -1443,7 +1485,33 @@ log "$(_t "Deploying files to system directories..." "部署文件到系统目�
 cp "$DOWNLOAD_DIR/luci/controller/adguardhome.lua"                     /usr/lib/lua/luci/controller/adguardhome.lua
 cp "$DOWNLOAD_DIR/luci/menu.d/luci-app-adguardhome-dashboard.json"     /usr/share/luci/menu.d/
 cp "$DOWNLOAD_DIR/luci/acl.json"                                       /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json
-cp "$DOWNLOAD_DIR/view/dashboard.js"                                   /www/luci-static/resources/view/adguardhome/dashboard.js
+
+# v2.8.0: 视图 JS 按包内 manifest.json 的版本部署为版本化文件名（dashboard_vX_Y_Z.js）——
+# 每个版本的视图 URL 唯一，浏览器不可能命中旧缓存，升级/降级后无需再手动禁用浏览器缓存。
+# 文件名禁用点号：LuCI 的 require() 会把名字里的 "." 全部替换成 "/"，因此用下划线。
+# v2.8.0: the view JS deploys under a version-named file (dashboard_vX_Y_Z.js, version read
+# from the packaged manifest.json) — one unique view URL per version, so the browser can never
+# hit a stale cached copy and no manual cache-disable is needed after install/upgrade/downgrade.
+# No dots in the filename: LuCI's require() replaces every "." with "/", hence underscores.
+_install_ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DOWNLOAD_DIR/manifest.json" 2>/dev/null | head -n1) || _install_ver=""
+_install_ver=$(printf '%s' "$_install_ver" | sed 's/^v//; s/[^0-9A-Za-z._-]//g; s/\./_/g')
+if [ -z "$_install_ver" ]; then
+    log "ERROR: cannot read the version from the packaged manifest.json - aborting before deploy"
+    exit 1
+fi
+JS_DST="/www/luci-static/resources/view/adguardhome/dashboard_v${_install_ver}.js"
+mv "$DOWNLOAD_DIR/view/dashboard.js" "$JS_DST"
+# menu.d 的视图路径同步改写为版本化文件名（兼容旧 menu.d 的固定名与旧版本化名两种形态），
+# 改写失败则中止 —— menu.d 与实际 JS 文件不配套面板将 404。
+# Rewrite menu.d's view path to the versioned filename (both historical shapes accepted);
+# abort on failure — a menu.d not paired with the deployed JS would 404 the panel.
+sed -i "s#\"adguardhome/dashboard[_a-zA-Z0-9]*\"#\"adguardhome/dashboard_v${_install_ver}\"#" /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json
+if ! grep -q "adguardhome/dashboard_v${_install_ver}" /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json; then
+    log "ERROR: failed to rewrite the menu.d view path - aborting"
+    exit 1
+fi
+log "$(_t "View deployed as: $JS_DST" "视图已部署为: $JS_DST")"
+
 cp "$DOWNLOAD_DIR/luci/i18n/adguardhome.lmo"                           /usr/lib/lua/luci/i18n/
 cp "$DOWNLOAD_DIR/luci/i18n/adguardhome.zh-cn.lmo"                     /usr/lib/lua/luci/i18n/
 cp "$DOWNLOAD_DIR/manifest.json"                                       /usr/share/adguardhome-dashboard/manifest.json
@@ -1455,7 +1523,7 @@ chmod 644 /usr/lib/lua/luci/controller/adguardhome.lua \
           /usr/lib/lua/luci/i18n/adguardhome.lmo \
           /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo \
           /usr/share/adguardhome-dashboard/manifest.json \
-          /www/luci-static/resources/view/adguardhome/dashboard.js
+          "$JS_DST"
 
 # ── Clear cache & restart services ── / 清除缓存 & 重启服务
 log "$(_t "Clearing LuCI cache and restarting services..." "清除 LuCI 缓存并重启服务...")"
@@ -1476,11 +1544,12 @@ if grep -q 'loadc' /usr/lib/lua/luci/controller/adguardhome.lua 2>/dev/null; the
 else
     log "  ✓ $(_t "controller.lua verified" "controller.lua 验证通过")"
 fi
-if grep -q 'fetchBackups' /www/luci-static/resources/view/adguardhome/dashboard.js 2>/dev/null; then
+# 校验对象是版本化部署路径 $JS_DST（v2.8.0 起固定名不再存在）/ Verify the versioned $JS_DST (the fixed name no longer exists since v2.8.0)
+if grep -q 'fetchBackups' "$JS_DST" 2>/dev/null; then
     log "  ✓ $(_t "dashboard.js verified (includes backup management)" "dashboard.js 验证通过（含备份管理）")"
 else
     log "$(_t "Warning: dashboard.js missing backup management (possibly a cached old build)" "⚠ 警告: dashboard.js 缺少备份管理功能（可能是代理缓存的旧版本）")"
-    log "  $(_t "Re-pull manually: curl -fsSL '${RAW_BASE}/files/view/dashboard.js' -o /www/luci-static/resources/view/adguardhome/dashboard.js" "手动重拉: curl -fsSL '${RAW_BASE}/files/view/dashboard.js' -o /www/luci-static/resources/view/adguardhome/dashboard.js")"
+    log "  $(_t "Re-pull manually: curl -fsSL '${RAW_BASE}/files/view/dashboard.js' -o '$JS_DST' then re-run the menu.d rewrite" "手动重拉: curl -fsSL '${RAW_BASE}/files/view/dashboard.js' -o '$JS_DST' 后重新执行 menu.d 改写")"
 fi
 if [ -f /usr/share/adguardhome-dashboard/manifest.json ] && grep -q '"version"' /usr/share/adguardhome-dashboard/manifest.json 2>/dev/null; then
     log "  ✓ $(_t "manifest.json verified" "manifest.json 验证通过")"
@@ -1501,7 +1570,7 @@ echo " $(_t "LuCI Dashboard:" "LuCI Dashboard:")"
 echo "   Controller:  /usr/lib/lua/luci/controller/adguardhome.lua"
 echo "   Menu:        /usr/share/luci/menu.d/luci-app-adguardhome-dashboard.json"
 echo "   ACL:         /usr/share/rpcd/acl.d/luci-app-adguardhome-dashboard.json"
-echo "   JS View:     /www/luci-static/resources/view/adguardhome/dashboard.js"
+echo "   JS View:     $JS_DST (version-named; menu.d points at it)"
 echo "   i18n (en):   /usr/lib/lua/luci/i18n/adguardhome.lmo"
 echo "   i18n (zh):   /usr/lib/lua/luci/i18n/adguardhome.zh-cn.lmo"
 echo ""
